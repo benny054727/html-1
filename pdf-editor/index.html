@@ -16,7 +16,7 @@
 <meta name="apple-mobile-web-app-title" content="MY PDF">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <title>עורך MY PDF</title>
-<link rel="stylesheet" href="app.css?v=13">
+<link rel="stylesheet" href="app.css?v=14">
 </head>
 <body>
 
@@ -81,6 +81,13 @@
     <h1>עורך <span class="ltr">MY PDF</span></h1>
     <p class="lead">עריכת PDF בעברית, ישר מהטלפון או מהמחשב</p>
     <p class="privacy"><svg class="i"><use href="#i-shield"/></svg> הקבצים נשארים אצלכם. שום דבר לא נשלח לשרת.</p>
+    <div class="resume" id="resumeCard" hidden>
+      <div class="resume-info"><span class="lbl">להמשיך מאיפה שעצרת?</span><b id="resumeName">מסמך</b><small id="resumeMeta"></small></div>
+      <div class="resume-actions">
+        <button class="btn primary" type="button" id="resumeBtn">המשך עבודה</button>
+        <button class="btn" type="button" id="resumeDiscard">קובץ חדש</button>
+      </div>
+    </div>
     <div class="drop" id="drop">
       <svg class="i big"><use href="#i-file"/></svg>
       <strong>גררו לכאן קובץ PDF</strong>
@@ -379,6 +386,6 @@
 
 <script src="vendor/pdf.min.js"></script>
 <script src="vendor/pdf-lib.min.js"></script>
-<script src="app.js?v=13"></script>
+<script src="app.js?v=14"></script>
 </body>
 </html>

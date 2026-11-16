@@ -20,6 +20,7 @@ const state = {
   selected: new Set(),
 };
 let uid = 1;
+const persisted = new Set();   // keys of files and pictures already in device storage
 const history = [];
 const thumbCache = new Map(); // page id -> {key, canvas}
 
@@ -258,7 +259,7 @@ const hexRgb = (hex) => { const n = parseInt(hex.slice(1), 16); return rgb((n >>
    from the pages so undo steps stay small. */
 const assets = new Map();          // key -> data URL
 const assetImgs = new Map();       // key -> decoded <img>
-function addAsset(dataUrl) { const k = 'a' + (uid++); assets.set(k, dataUrl); return k; }
+function addAsset(dataUrl) { const k = 'a' + Date.now().toString(36) + (uid++); assets.set(k, dataUrl); persisted.add(k); store.put('assets', k, dataUrl); return k; }
 function assetImg(k) {
   if (!assetImgs.has(k)) { const im = new Image(); im.src = assets.get(k) || ''; assetImgs.set(k, im); }
   return assetImgs.get(k);
@@ -329,17 +330,23 @@ async function addFiles(fileList) {
   busy(false);
   renderGrid();
 }
-async function addBytes(bytes, name) {
-  const s0 = state.pages.length > 0;
-  const pdf = await pdfjsLib.getDocument({
+function openPdf(bytes) {
+  return pdfjsLib.getDocument({
     data: bytes.slice(),
     isEvalSupported: false,          // never compile code from inside a PDF
     enableXfa: false,
     cMapUrl: 'vendor/cmaps/', cMapPacked: true,
     standardFontDataUrl: 'vendor/standard_fonts/',
   }).promise;
+}
+async function addBytes(bytes, name) {
+  const s0 = state.pages.length > 0;
+  if (!s0 && pendingSession) await forgetSession();   // a new document replaces the saved one
+  const pdf = await openPdf(bytes);
   const src = state.sources.length;
-  state.sources.push({ name, bytes, pdf, cache: new Map() });
+  const key = 'f' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+  state.sources.push({ name, bytes, pdf, cache: new Map(), key });
+  persisted.add(key); store.put('files', key, bytes);
   for (let i = 0; i < pdf.numPages; i++) state.pages.push({ id: uid++, src, idx: i, rot: 0, overlays: [], rects: [], objs: [] });
   if ($('fileName').dataset.auto !== 'no') {
     const merged = new Set(state.pages.map(p => p.src)).size > 1;
@@ -405,7 +412,8 @@ function renderGrid() {
   const total = state.pages.length;
   const srcCount = new Set(state.pages.map(p => p.src)).size;
   $('docName').textContent = ($('fileName').value || 'מסמך').replace(/\.pdf$/i, '');
-  $('docMeta').textContent = `${total} עמודים` + (srcCount > 1 ? ` · ${srcCount} קבצים ממוזגים` : '');
+  $('docMeta').textContent = pagesText(total) + (srcCount > 1 ? ` · ${srcCount} קבצים ממוזגים` : '');
+  showSaveState();
   $('grid').classList.toggle('selecting', selecting);
   $('tabbar').hidden = selecting;
   $('selbar').hidden = !selecting;
@@ -541,6 +549,7 @@ function startSelecting(id) {
 function stopSelecting() { selecting = false; state.selected.clear(); renderGrid(); }
 
 /* ---------- Page actions ---------- */
+const pagesText = (n) => n === 1 ? 'עמוד אחד' : `${n} עמודים`;
 const idxOf = (id) => state.pages.findIndex(p => p.id === id);
 function cloneWithNewIds(p) {
   const map = new Map();
@@ -1964,6 +1973,126 @@ $('shareBtn').onclick = async () => {
   try { await navigator.share({ files: [file], title: name }); }
   catch (e) { if (e && e.name !== 'AbortError') { saveBytes(bytes, name); toast('השיתוף לא זמין כאן, אז הקובץ ירד למכשיר.', 4500); } }
 };
+
+/* ---------- Saving work on the device ----------
+   The original files, the pages with every change, pictures and settings are kept in the browser's
+   storage on this device (IndexedDB). Nothing is sent anywhere. */
+const store = (() => {
+  let dbp = null;
+  const open = () => dbp || (dbp = new Promise((res, rej) => {
+    const r = indexedDB.open('mypdf', 1);
+    r.onupgradeneeded = () => { for (const n of ['files', 'assets', 'session']) r.result.createObjectStore(n); };
+    r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+  }));
+  const tx = (name, mode, fn) => open().then(db => new Promise((res, rej) => {
+    const t = db.transaction(name, mode), req = fn(t.objectStore(name));
+    t.oncomplete = () => res(req && req.result); t.onerror = () => rej(t.error); t.onabort = () => rej(t.error);
+  }));
+  const safe = (p) => p.catch(e => { console.warn('storage', e); return undefined; });
+  return {
+    get: (name, key) => safe(tx(name, 'readonly', s => s.get(key))),
+    put: (name, key, val) => safe(tx(name, 'readwrite', s => s.put(val, key))),
+    clear: (name) => safe(tx(name, 'readwrite', s => s.clear())),
+  };
+})();
+const SETTING_IDS = ['wmOn', 'wmText', 'wmSize', 'wmColor', 'wmOpacity', 'wmAngle', 'pnOn', 'pnFmt', 'pnPos', 'pnSize', 'pnStart'];
+let savedSig = '', saveState = 'saved', restoring = false;
+function sessionData() {
+  const used = new Set(state.pages.map(p => p.src));
+  return {
+    v: 1, at: Date.now(),
+    fileName: $('fileName').value, fileNameAuto: $('fileName').dataset.auto !== 'no',
+    sources: state.sources.map((s, i) => used.has(i) ? { key: s.key, name: s.name } : null),
+    pages: state.pages,
+    settings: Object.fromEntries(SETTING_IDS.map(id => [id, $(id).type === 'checkbox' ? $(id).checked : $(id).value])),
+  };
+}
+async function autosave() {
+  if (restoring) return;
+  const data = sessionData();
+  const sig = JSON.stringify([data.fileName, data.sources, data.pages, data.settings]);
+  if (sig === savedSig) return;
+  savedSig = sig;
+  saveState = 'saving'; showSaveState();
+  if (!state.pages.length) { persisted.clear(); await store.clear('session'); await store.clear('files'); await store.clear('assets'); }
+  else {
+    // files and pictures removed by "start over" come back with undo, so store anything missing again
+    for (const i of new Set(state.pages.map(p => p.src))) { const src = state.sources[i]; if (src && !persisted.has(src.key)) { persisted.add(src.key); await store.put('files', src.key, src.bytes); } }
+    for (const p of state.pages) for (const o of p.objs || []) if (!persisted.has(o.asset) && assets.has(o.asset)) { persisted.add(o.asset); await store.put('assets', o.asset, assets.get(o.asset)); }
+    await store.put('session', 'current', data);
+  }
+  saveState = 'saved'; showSaveState();
+}
+function showSaveState() {
+  const meta = $('docMeta'); if (!meta || !state.pages.length) return;
+  meta.querySelector('.save-state')?.remove();
+  const sp = document.createElement('span');
+  sp.className = 'save-state' + (saveState === 'saving' ? ' busy' : '');
+  sp.textContent = saveState === 'saving' ? ' · שומר…' : ' · נשמר ✓';
+  meta.appendChild(sp);
+}
+setInterval(autosave, 1500);
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') autosave(); });
+window.addEventListener('pagehide', autosave);
+// ask the browser not to clear this storage when space runs low
+try { navigator.storage && navigator.storage.persist && navigator.storage.persist(); } catch (_) {}
+
+/* Resume card on the start screen */
+let pendingSession = null;
+async function checkSession() {
+  const rec = await store.get('session', 'current');
+  if (!rec || !rec.pages || !rec.pages.length || state.pages.length) return;
+  pendingSession = rec;
+  const mins = Math.round((Date.now() - rec.at) / 60000);
+  const when = mins < 1 ? 'עכשיו' : mins < 60 ? `לפני ${mins} דקות` : mins < 1440 ? `לפני ${Math.round(mins / 60)} שעות` : `לפני ${Math.round(mins / 1440)} ימים`;
+  $('resumeName').textContent = (rec.fileName || 'מסמך').replace(/\.pdf$/i, '');
+  $('resumeMeta').textContent = `${pagesText(rec.pages.length)} · נשמר ${when}`;
+  $('resumeCard').hidden = false;
+}
+async function restoreSession(rec) {
+  restoring = true;
+  busy(true, 'פותח את המסמך ששמרת…');
+  try {
+    state.sources = []; state.pages = [];
+    for (const meta of rec.sources) {
+      if (!meta) { state.sources.push(null); continue; }
+      const bytes = await store.get('files', meta.key);
+      if (!bytes) throw new Error('missing file');
+      state.sources.push({ name: meta.name, key: meta.key, bytes, pdf: await openPdf(bytes), cache: new Map() });
+      persisted.add(meta.key);
+    }
+    for (const p of rec.pages) for (const o of p.objs || []) {
+      if (!assets.has(o.asset)) { const d = await store.get('assets', o.asset); if (d) { assets.set(o.asset, d); persisted.add(o.asset); } }
+    }
+    state.pages = rec.pages.filter(p => state.sources[p.src]);
+    let maxId = 0;
+    const walk = (v) => { if (v && typeof v === 'object') { if (typeof v.id === 'number') maxId = Math.max(maxId, v.id); Object.values(v).forEach(walk); } };
+    walk(state.pages);
+    uid = maxId + 1;
+    for (const [id, v] of Object.entries(rec.settings || {})) { const el = $(id); if (!el) continue; if (el.type === 'checkbox') el.checked = !!v; else el.value = v; }
+    $('fileName').value = rec.fileName || 'מסמך.pdf';
+    if (!rec.fileNameAuto) $('fileName').dataset.auto = 'no';
+    history.length = 0; $('undoBtn').disabled = true;
+    $('resumeCard').hidden = true; pendingSession = null;
+    onSettings();
+    renderGrid();
+    toast('המסמך נפתח מאיפה שעצרת');
+  } catch (e) {
+    console.warn(e);
+    state.sources = []; state.pages = [];
+    toast('לא הצלחתי לפתוח את העבודה השמורה. אפשר לבחור את הקובץ מחדש.', 5000);
+    $('resumeCard').hidden = true;
+  } finally {
+    restoring = false; savedSig = ''; busy(false);
+  }
+}
+$('resumeBtn').onclick = () => pendingSession && restoreSession(pendingSession);
+async function forgetSession() {
+  pendingSession = null; $('resumeCard').hidden = true; persisted.clear();
+  await store.clear('session'); await store.clear('files'); await store.clear('assets');
+}
+$('resumeDiscard').onclick = async () => { await forgetSession(); toast('העבודה השמורה נמחקה. אפשר לבחור קובץ חדש.'); };
+checkSession();
 
 /* ---------- App: offline support and installing to the home screen ---------- */
 if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
