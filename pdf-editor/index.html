@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; worker-src 'self'; style-src 'self'; font-src 'self' data:; img-src 'self' blob: data:; connect-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'">
+<meta name="referrer" content="no-referrer">
+<title>דפדף – עורך PDF</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div class="brand">
+      <div class="logo" aria-hidden="true">ד</div>
+      <div>
+        <h1>דפדף</h1>
+        <p>עורך PDF שעובד כולו בדפדפן. הקבצים לא נשלחים לשום שרת.</p>
+      </div>
+    </div>
+    <div class="top-actions">
+      <button class="btn" id="undoBtn" disabled title="Ctrl+Z">↶ ביטול פעולה</button>
+      <button class="btn primary" id="downloadBtn" disabled>⬇ הורדת ה‑PDF</button>
+    </div>
+  </header>
+
+  <section class="drop" id="drop">
+    <input type="file" id="fileInput" accept="application/pdf,.pdf" multiple hidden>
+    <strong id="dropTitle">גררו לכאן קובצי PDF</strong>
+    <div class="drop-row">
+      <button class="btn primary" id="pickBtn">בחירת קבצים</button>
+      <button class="btn link" id="sampleBtn">או נסו קובץ לדוגמה</button>
+    </div>
+    <div class="drop-help">
+      <div><b>מיזוג</b>כמה קבצים יחד הופכים לקובץ אחד</div>
+      <div><b>סידור ומחיקה</b>גרירה, חצים, סיבוב ושכפול עמודים</div>
+      <div><b>פיצול</b>בוחרים עמודים ומורידים רק אותם</div>
+      <div><b>טקסט וחותמת</b>הוספת טקסט בעברית, סימן מים ומספרי עמודים</div>
+    </div>
+  </section>
+
+  <section id="workspace" hidden>
+    <div class="toolbar" role="toolbar" aria-label="פעולות על עמודים">
+      <span class="count" id="countLabel"></span>
+      <button class="btn" id="selAllBtn">בחירת הכל</button>
+      <button class="btn" id="selNoneBtn">ניקוי בחירה</button>
+      <span class="sep"></span>
+      <button class="btn" id="rotLBtn" data-needsel>↺ סיבוב שמאלה</button>
+      <button class="btn" id="rotRBtn" data-needsel>↻ סיבוב ימינה</button>
+      <button class="btn" id="dupBtn" data-needsel>⧉ שכפול</button>
+      <button class="btn danger" id="delBtn" data-needsel>✕ מחיקה</button>
+      <span class="sep"></span>
+      <button class="btn" id="extractBtn" data-needsel>⬇ הורדת הנבחרים בלבד</button>
+      <button class="btn danger" id="clearBtn">התחלה מחדש</button>
+    </div>
+
+    <div class="layout">
+      <div class="grid" id="grid" aria-label="עמודי המסמך"></div>
+
+      <aside class="panel" aria-label="הגדרות לכל העמודים">
+        <h2>הגדרות לכל המסמך</h2>
+
+        <div class="group" id="wmGroup">
+          <label class="switch"><input type="checkbox" id="wmOn"> סימן מים</label>
+          <div class="field"><label for="wmText">טקסט</label><input type="text" id="wmText" value="טיוטה"></div>
+          <div class="row">
+            <div class="field"><label for="wmSize">גודל (נק׳)</label><input type="number" id="wmSize" value="72" min="8" max="300"></div>
+            <div class="field shrink"><label for="wmColor">צבע</label><input type="color" id="wmColor" value="#c0392b"></div>
+          </div>
+          <div class="field"><label for="wmOpacity">שקיפות: <span id="wmOpacityVal">25%</span></label><input type="range" id="wmOpacity" min="5" max="100" value="25"></div>
+          <div class="field"><label for="wmAngle">זווית</label>
+            <select id="wmAngle"><option value="45">אלכסון ↗</option><option value="-45">אלכסון ↘</option><option value="0">ישר</option></select>
+          </div>
+        </div>
+
+        <div class="group" id="pnGroup">
+          <label class="switch"><input type="checkbox" id="pnOn"> מספרי עמודים</label>
+          <div class="field"><label for="pnFmt">תבנית</label>
+            <select id="pnFmt">
+              <option value="n">3</option>
+              <option value="n/t">3 / 12</option>
+              <option value="he">עמוד 3 מתוך 12</option>
+              <option value="dash">– 3 –</option>
+            </select>
+          </div>
+          <div class="row">
+            <div class="field"><label for="pnPos">מיקום</label>
+              <select id="pnPos"><option value="bc">למטה במרכז</option><option value="br">למטה מימין</option><option value="bl">למטה משמאל</option><option value="tc">למעלה במרכז</option></select>
+            </div>
+            <div class="field w80"><label for="pnSize">גודל</label><input type="number" id="pnSize" value="11" min="6" max="48"></div>
+          </div>
+          <div class="field"><label for="pnStart">מספר ההתחלה</label><input type="number" id="pnStart" value="1" min="0" max="9999"></div>
+        </div>
+
+        <div class="group">
+          <div class="field"><label for="fileName">שם הקובץ להורדה</label><input type="text" id="fileName" value="מסמך.pdf"></div>
+          <p class="hint">טיפ: לחיצה על עמוד בוחרת אותו. ✎ פותח את עריכת העמוד: הוספת טקסט, שינוי טקסט קיים ומחיקת אזורים. גוררים עמוד כדי לשנות סדר. אפשר לגרור עוד קבצים לכל מקום בדף.</p>
+        </div>
+      </aside>
+    </div>
+  </section>
+</div>
+
+<dialog id="editor" aria-labelledby="edTitle">
+  <div class="ed-head">
+    <h3 id="edTitle">עריכת עמוד</h3>
+    <button class="btn" id="edClose">סיום</button>
+  </div>
+  <div class="ed-modes" id="edModes" role="group" aria-label="סוג עריכה">
+    <button class="mode" type="button" data-mode="text" aria-pressed="true">✎ הוספת טקסט</button>
+    <button class="mode" type="button" data-mode="edit" aria-pressed="false">✐ שינוי טקסט קיים</button>
+    <button class="mode" type="button" data-mode="erase" aria-pressed="false">⌫ מחיקת אזור</button>
+  </div>
+  <div class="ed-tools" id="edTextTools">
+    <div class="field grow"><label for="edText">טקסט</label><input type="text" id="edText" value="" placeholder="כתבו כאן טקסט ואז לחצו על העמוד"></div>
+    <div class="field"><label for="edSize">גודל (נק׳)</label><input type="number" id="edSize" value="18" min="4" max="300"></div>
+    <div class="field"><label for="edColor">צבע</label><input type="color" id="edColor" value="#1a3fb0"></div>
+    <label class="switch pb"><input type="checkbox" id="edBold"> מודגש</label>
+  </div>
+  <div class="ed-body"><div class="stage" id="stage"></div></div>
+  <div class="ed-foot">
+    <p class="hint" id="edHint">כתבו טקסט בשדה למעלה ולחצו על העמוד כדי להוסיף אותו.</p>
+    <div class="row"><button class="btn" id="edPrev">→ עמוד קודם</button><button class="btn" id="edNext">עמוד הבא ←</button></div>
+  </div>
+</dialog>
+
+<div id="toast" role="status" hidden></div>
+<div class="busy" id="busy" hidden><div id="busyText">מכין את הקובץ…</div></div>
+
+<script src="vendor/pdf.min.js"></script>
+<script src="vendor/pdf-lib.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
