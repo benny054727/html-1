@@ -6,7 +6,7 @@
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; worker-src 'self'; style-src 'self'; font-src 'self' data:; img-src 'self' blob: data:; connect-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'">
 <meta name="referrer" content="no-referrer">
 <title>דפדף – עורך PDF</title>
-<link rel="stylesheet" href="app.css?v=4">
+<link rel="stylesheet" href="app.css?v=5">
 </head>
 <body>
 <div class="wrap">
@@ -123,9 +123,11 @@
   </div>
   <div class="ed-tools" id="edTextTools">
     <div class="field grow"><label for="edText">טקסט</label><input type="text" id="edText" value="" placeholder="כתבו טקסט ולחצו על העמוד"></div>
+    <div class="field"><label for="edFont">גופן</label><select id="edFont"></select></div>
     <div class="field"><label for="edSize">גודל (נק׳)</label><input type="number" id="edSize" value="18" min="4" max="300"></div>
     <div class="field"><label for="edColor">צבע</label><input type="color" id="edColor" value="#1a3fb0"></div>
     <label class="switch pb"><input type="checkbox" id="edBold"> <span class="lg">מודגש</span><b class="sm">B</b></label>
+    <label class="switch pb" title="שומר את הטקסט על הקו של השורה המקורית ומצמיד טקסט חדש לשורות קרובות"><input type="checkbox" id="edLock" checked> יישור לשורה</label>
   </div>
   <div class="ed-body" id="edBody" dir="ltr"><div class="stage" id="stage"></div></div>
   <div class="ed-foot">
@@ -138,6 +140,6 @@
 
 <script src="vendor/pdf.min.js"></script>
 <script src="vendor/pdf-lib.min.js"></script>
-<script src="app.js?v=4"></script>
+<script src="app.js?v=5"></script>
 </body>
 </html>
