@@ -651,3 +651,14 @@ input[type=search] { width: 100%; border: 1px solid var(--line); background: var
 .resume-actions { display: flex; gap: 8px; }
 .save-state { color: var(--accent); }
 .save-state.busy { color: var(--muted); }
+
+/* Erase options and secure redaction */
+.erase-tools { flex: none; display: flex; flex-direction: column; gap: 6px; background: var(--surface); border-bottom: 1px solid var(--line);
+  padding: 0 max(12px, env(safe-area-inset-right, 0px)) 8px max(12px, env(safe-area-inset-left, 0px)); }
+.erase-tools .mode { gap: 6px; }
+.erase-tools .mode .i { width: 16px; height: 16px; }
+.erase-note { margin: 0; font-size: 12.5px; color: var(--muted); line-height: 1.45; }
+.er.redact { outline: 2px solid #ef4444; outline-offset: 1px; }
+.er.drawing.redact-draw { background: rgba(0,0,0,.75); outline: 0; }
+.secure-row { align-items: flex-start; font-weight: 400; font-size: 14px; line-height: 1.45; background: var(--surface-2); border-radius: 12px; padding: 10px 12px; }
+.secure-row input { margin-top: 2px; flex: none; }

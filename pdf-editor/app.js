@@ -843,8 +843,30 @@ async function drawRealText(doc, page, st, fonts, ux, uy, th) {
   return true;
 }
 
+/* Secure redaction: the page is redrawn as a picture with the covers burned in, so nothing that was
+   under a cover (text, images, hidden layers, links) is left in the file. Text added in the editor
+   is written on top afterwards and stays real text. */
+async function flatPage(out, p, pg) {
+  const [x0, y0, x1, y1] = pg.view, w = x1 - x0, h = y1 - y0;
+  const scale = Math.min(200 / 72, 4200 / Math.max(w, h));       // about 200 dpi
+  const vp = pg.getViewport({ scale, rotation: 0 });
+  const c = document.createElement('canvas');
+  c.width = Math.ceil(vp.width); c.height = Math.ceil(vp.height);
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height);
+  await pg.render({ canvasContext: ctx, viewport: vp }).promise;
+  drawRects(ctx, p, vp);
+  const img = await out.embedJpg(c.toDataURL('image/jpeg', 0.92));
+  c.width = c.height = 0;
+  const page = out.addPage([w, h]);
+  page.setMediaBox(x0, y0, w, h);
+  page.drawImage(img, { x: x0, y: y0, width: w, height: h });
+  return page;
+}
+
 async function buildPdf(pages) {
   await ensureFontsFor(pages);
+  const secureAll = $('dlSecure').checked;
   const set = settings();
   const out = await PDFDocument.create();
   const srcDocs = new Map();
@@ -853,13 +875,19 @@ async function buildPdf(pages) {
   for (let n = 0; n < pages.length; n++) {
     const p = pages[n];
     if (!srcDocs.has(p.src)) srcDocs.set(p.src, await PDFDocument.load(state.sources[p.src].bytes, { ignoreEncryption: true }));
-    const [page] = await out.copyPages(srcDocs.get(p.src), [p.idx]);
-    out.addPage(page);
     const pg = await getPage(p.src, p.idx);
+    const rects = p.rects || [];
+    const flatten = rects.some(r => r.redact) || (secureAll && rects.length);
+    let page;
+    if (flatten) page = await flatPage(out, p, pg);
+    else {
+      [page] = await out.copyPages(srcDocs.get(p.src), [p.idx]);
+      out.addPage(page);
+    }
     const R = totalRot(pg, p);
     page.setRotation(degrees(R));
     const vp = pg.getViewport({ scale: 1, rotation: R });
-    for (const r of p.rects || []) {
+    if (!flatten) for (const r of rects) {
       page.drawRectangle({ x: r.x1, y: r.y1, width: r.x2 - r.x1, height: r.y2 - r.y1, color: hexRgb(r.color), borderWidth: 0 });
     }
     for (const st of stampList(p, pg, vp, n, pages.length, set)) {
@@ -911,6 +939,9 @@ $('downloadBtn').onclick = () => {
   const k = state.selected.size;
   $('dlAllLabel').textContent = `הורדת המסמך (${state.pages.length} עמודים)`;
   $('dlSelBtn').hidden = !k;
+  const covered = state.pages.some(p => (p.rects || []).some(r => !r.redact));
+  $('dlSecureRow').hidden = !covered;
+  if (!covered) $('dlSecure').checked = false;
   $('dlSelLabel').textContent = k === 1 ? 'הורדת העמוד שנבחר בלבד' : `הורדת ${k} העמודים שנבחרו`;
   openSheet('dlSheet');
 };
@@ -929,7 +960,7 @@ const edSel = () => edPage()?.overlays.find(o => o.id === ed.selId);
 const HINTS = {
   text: 'כתבו טקסט בשדה למעלה ולחצו על העמוד כדי להוסיף אותו. גוררים טקסט כדי להזיז אותו.',
   edit: 'בחרו אם הקשה בוחרת אות, מילה או שורה, ולחצו על הטקסט כדי לשנות אותו. סל האשפה בסרגל מחזיר את המקור.',
-  erase: 'גררו מלבן על האזור שרוצים למחוק. הכיסוי מקבל את צבע הרקע של הדף. שימו לב: הטקסט המקורי נשאר בתוך הקובץ מתחת לכיסוי, ולכן זה לא מתאים להסתרת מידע רגיש.',
+  erase: 'גררו מלבן על האזור שרוצים למחוק.',
 };
 
 async function openEditor(id) {
@@ -958,6 +989,8 @@ function setMode(m) {
   }
   $('edTextTools').classList.toggle('off', m === 'erase' || drawing);
   $('unitSeg').hidden = m !== 'edit';
+  $('eraseTools').hidden = m !== 'erase';
+  syncEraseSeg();
   drawOverlays();
 }
 async function drawEditor() {
@@ -1113,7 +1146,7 @@ function drawOverlays() {
   for (const r of rects) {
     const v = toView(r);
     const el = document.createElement('div');
-    el.className = 'er' + (r.id === ed.selRect ? ' sel' : '');
+    el.className = 'er' + (r.id === ed.selRect ? ' sel' : '') + (r.redact ? ' redact' : '');
     el.dataset.id = r.id;
     Object.assign(el.style, { left: v.left + 'px', top: v.top + 'px', width: v.width + 'px', height: v.height + 'px', background: r.color });
     if (!r.link) el.appendChild(xButton('ביטול המחיקה'));
@@ -1410,7 +1443,7 @@ $('stage').addEventListener('pointerdown', (e) => {
   if (ed.mode === 'erase' || ed.mode === 'shape' || ed.mode === 'mark') {
     const [x, y] = stagePoint(e);
     const el = document.createElement('div');
-    el.className = 'er drawing' + (ed.mode === 'shape' ? ' shape' : ed.mode === 'mark' ? ' mark' : '');
+    el.className = 'er drawing' + (ed.mode === 'shape' ? ' shape' : ed.mode === 'mark' ? ' mark' : prefs.erase === 'redact' ? ' redact-draw' : '');
     $('stage').appendChild(el);
     ed.draw = { x0: x, y0: y, el, x, y };
     return;
@@ -1507,7 +1540,8 @@ function endPointer(e) {
   const [bx, by] = ed.vp.convertToPdfPoint(v.left + w, v.top + h);
   snapshot();
   p.rects = p.rects || [];
-  const r = { id: uid++, x1: Math.min(ax, bx), y1: Math.min(ay, by), x2: Math.max(ax, bx), y2: Math.max(ay, by), color: sampleBg(v) };
+  const redact = prefs.erase === 'redact';
+  const r = { id: uid++, x1: Math.min(ax, bx), y1: Math.min(ay, by), x2: Math.max(ax, bx), y2: Math.max(ay, by), color: redact ? '#000000' : sampleBg(v), redact };
   p.rects.push(r);
   ed.selRect = r.id;
   drawOverlays();
@@ -1692,6 +1726,19 @@ $('rotReset').onclick = () => { applyStyle({ rot: 0 }); syncStyleSheet(); };
 $('lockLine').addEventListener('change', () => { prefs.lock = $('lockLine').checked; savePrefs(); });
 
 /* Edit mode: word or whole line */
+const ERASE_NOTES = {
+  cover: 'כיסוי בצבע הדף: מסתיר את האזור, אבל מה שמתחתיו נשאר בתוך הקובץ. מתאים לניקוי והסתרת טעויות, לא למידע רגיש.',
+  redact: 'השחרה מאובטחת: בהורדה, מה שמתחת למלבן השחור נמחק מהקובץ לגמרי. העמוד הזה יישמר כתמונה (טקסט שהוספתם נשאר טקסט).',
+};
+function syncEraseSeg() {
+  if (!['cover', 'redact'].includes(prefs.erase)) prefs.erase = 'cover';
+  $('eraseSeg').querySelectorAll('[data-erase]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.erase === prefs.erase)));
+  $('eraseNote').textContent = ERASE_NOTES[prefs.erase];
+}
+$('eraseSeg').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-erase]'); if (!b) return;
+  prefs.erase = b.dataset.erase; savePrefs(); syncEraseSeg();
+});
 function syncUnitSeg() { $('unitSeg').querySelectorAll('[data-unit]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.unit === prefs.unit))); }
 $('unitSeg').addEventListener('click', (e) => {
   const b = e.target.closest('[data-unit]'); if (!b) return;

@@ -1,9 +1,9 @@
 /* עורך MY PDF – offline support.
    The app shell is stored on install; everything else from this site is stored the first time it is used.
    Pages are fetched from the network first so updates arrive; files with a version in their address come from the store. */
-const VERSION = 'mypdf-v15';
+const VERSION = 'mypdf-v16';
 const SHELL = [
-  './', 'index.html', 'app.css?v=15', 'app.js?v=15', 'manifest.webmanifest',
+  './', 'index.html', 'app.css?v=16', 'app.js?v=16', 'manifest.webmanifest',
   'vendor/pdf.min.js', 'vendor/pdf.worker.min.js', 'vendor/pdf-lib.min.js',
   'vendor/fonts/heebo-hebrew-400-normal.woff2', 'vendor/fonts/heebo-latin-400-normal.woff2',
   'vendor/fonts/heebo-hebrew-500-normal.woff2', 'vendor/fonts/heebo-latin-500-normal.woff2',
