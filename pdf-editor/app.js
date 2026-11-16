@@ -81,25 +81,41 @@ const textImgCache = new Map();
 const measureCtx = document.createElement('canvas').getContext('2d');
 /* Fonts bundled with the app. Each has Hebrew and Latin letters and digits.
    Arimo and Tinos have the same letter widths as Arial and Times New Roman. */
-const FONT_GROUPS = ['דומים לגופני Word', 'עבריים קלאסיים', 'מודרניים', 'כתב יד ומיוחדים'];
+const FONT_GROUPS = ['דומים לגופני Word', 'עבריים קלאסיים', 'מודרניים', 'כתב יד ומיוחדים', 'דקורטיביים (לכותרות והזמנות)'];
 const FONTS = {
   arimo:     { g: 0, label: 'Arial (אריאל)', family: 'Arimo' },
   tinos:     { g: 0, label: 'Times New Roman', family: 'Tinos' },
   cousine:   { g: 0, label: 'Courier New (מכונת כתיבה)', family: 'Cousine' },
   david:     { g: 0, label: 'David (דוד)', family: 'David Libre' },
   frank:     { g: 0, label: 'Frank Ruehl (פרנק רוהל)', family: 'Frank Ruhl Libre' },
+  frankL:    { g: 0, label: 'Frank Ruehl דק', family: 'Frank Ruhl Libre', w: 300 },
+  frankB:    { g: 0, label: 'Frank Ruehl שחור', family: 'Frank Ruhl Libre', w: 900 },
   miriam:    { g: 0, label: 'Miriam (מרים)', family: 'Miriam Libre' },
   alef:      { g: 0, label: 'אלף (Alef)', family: 'Alef' },
   notoserif: { g: 1, label: 'נוטו סריף (Noto Serif)', family: 'Noto Serif Hebrew' },
+  notoserifL: { g: 1, label: 'נוטו סריף דק', family: 'Noto Serif Hebrew', w: 200 },
+  notoserifB: { g: 1, label: 'נוטו סריף שחור', family: 'Noto Serif Hebrew', w: 900 },
   bellefair: { g: 1, label: 'בלפייר (Bellefair)', family: 'Bellefair' },
   bonanova:  { g: 1, label: 'בונה נובה (Bona Nova)', family: 'Bona Nova' },
+  bonanovasc: { g: 1, label: 'בונה נובה – אותיות גדולות', family: 'Bona Nova SC' },
   rashi:     { g: 1, label: 'כתב רש״י (Noto Rashi)', family: 'Noto Rashi Hebrew' },
   heebo:     { g: 2, label: 'Heebo (היבו)', family: 'Heebo' },
+  heeboL:    { g: 2, label: 'Heebo דק', family: 'Heebo', w: 200 },
+  heeboB:    { g: 2, label: 'Heebo שחור', family: 'Heebo', w: 900 },
   assistant: { g: 2, label: 'Assistant (אסיסטנט)', family: 'Assistant' },
+  assistantL: { g: 2, label: 'Assistant דק', family: 'Assistant', w: 200 },
+  assistantB: { g: 2, label: 'Assistant כבד', family: 'Assistant', w: 800 },
   rubik:     { g: 2, label: 'Rubik (רוביק)', family: 'Rubik' },
+  rubikL:    { g: 2, label: 'Rubik דק', family: 'Rubik', w: 300 },
+  rubikB:    { g: 2, label: 'Rubik שחור', family: 'Rubik', w: 900 },
   opensans:  { g: 2, label: 'Open Sans', family: 'Open Sans' },
+  opensansL: { g: 2, label: 'Open Sans דק', family: 'Open Sans', w: 300 },
+  opensansB: { g: 2, label: 'Open Sans כבד', family: 'Open Sans', w: 800 },
   notosans:  { g: 2, label: 'Noto Sans (נוטו)', family: 'Noto Sans Hebrew' },
+  notosansL: { g: 2, label: 'Noto Sans דק', family: 'Noto Sans Hebrew', w: 200 },
+  notosansB: { g: 2, label: 'Noto Sans שחור', family: 'Noto Sans Hebrew', w: 900 },
   plex:      { g: 2, label: 'IBM Plex (פלקס)', family: 'IBM Plex Sans Hebrew' },
+  plexL:     { g: 2, label: 'IBM Plex דק', family: 'IBM Plex Sans Hebrew', w: 200 },
   varela:    { g: 2, label: 'Varela Round (מעוגל)', family: 'Varela Round' },
   fredoka:   { g: 2, label: 'Fredoka (פרדוקה)', family: 'Fredoka' },
   secular:   { g: 2, label: 'Secular One (כותרות)', family: 'Secular One' },
@@ -109,13 +125,39 @@ const FONTS = {
   gveret:    { g: 3, label: 'גברת לוין (כתב יד)', family: 'Gveret Levin' },
   karantina: { g: 3, label: 'קרנטינה (Karantina)', family: 'Karantina' },
   solitreo:  { g: 3, label: 'סוליטראו (Solitreo)', family: 'Solitreo' },
+  deco0: { g: 4, label: 'רוביק שנות ה־80', family: 'Rubik 80s Fade' },
+  deco1: { g: 4, label: 'רוביק מפלצתי', family: 'Rubik Beastly' },
+  deco2: { g: 4, label: 'רוביק פקס שבור', family: 'Rubik Broken Fax' },
+  deco3: { g: 4, label: 'רוביק בועות', family: 'Rubik Bubbles' },
+  deco4: { g: 4, label: 'רוביק שרוף', family: 'Rubik Burned' },
+  deco5: { g: 4, label: 'רוביק מלוכלך', family: 'Rubik Dirt' },
+  deco6: { g: 4, label: 'רוביק שחוק', family: 'Rubik Distressed' },
+  deco7: { g: 4, label: 'רוביק שרבוט עם צל', family: 'Rubik Doodle Shadow' },
+  deco8: { g: 4, label: 'רוביק משולשים', family: 'Rubik Doodle Triangles' },
+  deco9: { g: 4, label: 'רוביק אבני חן', family: 'Rubik Gemstones' },
+  deco10: { g: 4, label: 'רוביק גליץ׳', family: 'Rubik Glitch' },
+  deco11: { g: 4, label: 'רוביק גליץ׳ פופ', family: 'Rubik Glitch Pop' },
+  deco12: { g: 4, label: 'רוביק תלת־ממד', family: 'Rubik Iso' },
+  deco13: { g: 4, label: 'רוביק קווים', family: 'Rubik Lines' },
+  deco14: { g: 4, label: 'רוביק מפות', family: 'Rubik Maps' },
+  deco15: { g: 4, label: 'רוביק טוש', family: 'Rubik Marker Hatch' },
+  deco16: { g: 4, label: 'רוביק מבוך', family: 'Rubik Maze' },
+  deco17: { g: 4, label: 'רוביק חיידקים', family: 'Rubik Microbe' },
+  deco18: { g: 4, label: 'רוביק סלעי ירח', family: 'Rubik Moonrocks' },
+  deco19: { g: 4, label: 'רוביק פיקסלים', family: 'Rubik Pixels' },
+  deco20: { g: 4, label: 'רוביק שלוליות', family: 'Rubik Puddles' },
+  deco21: { g: 4, label: 'רוביק קשקוש', family: 'Rubik Scribble' },
+  deco22: { g: 4, label: 'רוביק ספריי', family: 'Rubik Spray Paint' },
+  deco23: { g: 4, label: 'רוביק סערה', family: 'Rubik Storm' },
+  deco24: { g: 4, label: 'רוביק ויניל', family: 'Rubik Vinyl' },
+  deco25: { g: 4, label: 'רוביק צבע רטוב', family: 'Rubik Wet Paint' },
 };
 /* Fonts download only when they are first used */
 const fontReady = new Map();
 function ensureFont(k) {
   const f = FONTS[k]; if (!f || !document.fonts || !document.fonts.load) return Promise.resolve();
   if (!fontReady.has(k)) {
-    fontReady.set(k, Promise.allSettled([400, 700].map(w => document.fonts.load(`${w} 20px "${f.family}"`, 'אבג abc 123')))
+    fontReady.set(k, Promise.allSettled([...new Set([fontWeight(k, false), fontWeight(k, true)])].map(w => document.fonts.load(`${w} 20px "${f.family}"`, 'אבג abc 123')))
       .then(() => { textImgCache.clear(); thumbCache.clear(); }));
   }
   return fontReady.get(k);
@@ -125,13 +167,14 @@ function ensureFontsFor(pages) {
   for (const p of pages) for (const o of p.overlays) keys.add(o.font || 'heebo');
   return Promise.all([...keys].map(ensureFont));
 }
+const fontWeight = (k, bold) => { const w = (FONTS[k] || {}).w || 400; return bold ? Math.max(700, w) : w; };
 const fontStack = (k) => `"${(FONTS[k] || FONTS.heebo).family}", Heebo, Arial, sans-serif`;
 
 /* The text is drawn into an image with a known baseline (asc from the top), so it can sit exactly on a line */
 function textImage(text, size, color, bold, fontKey) {
   const key = [text, size, color, bold, fontKey || 'heebo'].join('\u0001');
   if (textImgCache.has(key)) return textImgCache.get(key);
-  const font = `${bold ? 700 : 400} ${size}px ${fontStack(fontKey)}`;
+  const font = `${fontWeight(fontKey, bold)} ${size}px ${fontStack(fontKey)}`;
   measureCtx.font = font;
   const pad = size * 0.1;
   const w = Math.max(1, measureCtx.measureText(text).width) + pad * 2;
