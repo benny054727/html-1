@@ -217,7 +217,7 @@ function textImage(text, size, color, bold, fontKey, fx) {
     if (fx.u && widths[i]) ctx.fillRect(x0s[i], by + size * 0.11, widths[i], th);
     if (fx.st && widths[i]) ctx.fillRect(x0s[i], by - size * 0.3, widths[i] + extra * 0.4, th);
   });
-  const out = { canvas: c, w, h, asc, pad, padL: pad, padR: pad + extra, key };
+  const out = { canvas: c, w, h, asc, pad, padL: pad, padR: pad + extra, key, lines: lines.map((l, i) => ({ x0: x0s[i], w: widths[i], by: asc + i * lh })) };
   textImgCache.set(key, out);
   if (textImgCache.size > 300) textImgCache.delete(textImgCache.keys().next().value);
   return out;
@@ -278,19 +278,20 @@ function stampList(p, pg, vp, n, total, set) {
   for (const o of p.overlays) {
     if (!o.text.trim()) continue;
     const [cx, cy] = overlayCenter(o, vp, R);
-    out.push({ img: ovImg(o), cx, cy, a: ovAngle(o, R), op: o.op ?? 1 });
+    out.push({ img: ovImg(o), cx, cy, a: ovAngle(o, R), op: o.op ?? 1, t: { text: o.text, size: o.size, color: o.color, bold: o.bold, font: o.font, fx: fxOf(o) } });
   }
   if (set.wm.on && set.wm.text.trim()) {
-    out.push({ img: textImage(set.wm.text, set.wm.size, set.wm.color, true), cx: vp.width / 2, cy: vp.height / 2, a: set.wm.angle, op: set.wm.opacity });
+    out.push({ img: textImage(set.wm.text, set.wm.size, set.wm.color, true), cx: vp.width / 2, cy: vp.height / 2, a: set.wm.angle, op: set.wm.opacity, t: { text: set.wm.text, size: set.wm.size, color: set.wm.color, bold: true, font: 'heebo', fx: {} } });
   }
   if (set.pn.on) {
-    const img = textImage(pageNumberText(set.pn.fmt, n + set.pn.start, total + set.pn.start - 1), set.pn.size, '#333333', false);
+    const pnText = pageNumberText(set.pn.fmt, n + set.pn.start, total + set.pn.start - 1);
+    const img = textImage(pnText, set.pn.size, '#333333', false);
     const m = 28 * s, iw = img.w * s;
     let cx = vp.width / 2, cy = vp.height - m;
     if (set.pn.pos === 'br') cx = vp.width - m - iw / 2;
     if (set.pn.pos === 'bl') cx = m + iw / 2;
     if (set.pn.pos === 'tc') cy = m;
-    out.push({ img, cx, cy, a: 0, op: 1 });
+    out.push({ img, cx, cy, a: 0, op: 1, t: { text: pnText, size: set.pn.size, color: '#333333', bold: false, font: 'heebo', fx: {} } });
   }
   return out;
 }
@@ -716,12 +717,139 @@ function onSettings() {
   .forEach(id => { $(id).addEventListener('input', onSettings); $(id).addEventListener('change', onSettings); });
 
 /* ---------- Export ---------- */
+/* ---------- Real text in the exported PDF ----------
+   Text is written as real PDF text with the font embedded (only the letters used), so it can be
+   selected, copied and searched, and stays sharp at any zoom. Hebrew is put in visual order here
+   because PDF text runs left to right. If a font or a character is not available, that text falls
+   back to a picture, exactly as it looks in the editor. */
+let fontkitReady = null;
+function loadFontkit() {
+  return fontkitReady || (fontkitReady = new Promise((res) => {
+    if (window.fontkit) return res(window.fontkit);
+    const sc = document.createElement('script');
+    sc.src = 'vendor/fontkit.umd.min.js';
+    sc.onload = () => res(window.fontkit || null); sc.onerror = () => res(null);
+    document.head.appendChild(sc);
+  }));
+}
+const HEB_CH = /[֐-׿יִ-ﭏ₪]/;
+const HEB_MARK = /[֑-ׇ]/;
+const LATIN_CH = /[ -~ -ÿ -⁯€™−]/;
+const subsetOf = (ch) => HEB_CH.test(ch) ? 'hebrew' : 'latin';
+/* Bidi for one line: runs in visual (left-to-right) order. Inside a Hebrew run the letters stay in
+   reading order; the drawing code places them from right to left. */
+function bidiRuns(line, rtl) {
+  const cl = [];
+  for (const ch of line) { if (HEB_MARK.test(ch) && cl.length) cl[cl.length - 1] += ch; else cl.push(ch); }
+  // character types, following the Unicode bidi rules that browsers use
+  const typ = (c) => { const ch = c[0];
+    if (HEB_CH.test(ch) && ch !== '₪') return 'R';
+    if (/[0-9]/.test(ch)) return 'EN';
+    if (/[A-Za-zÀ-ÿ]/.test(ch)) return 'L';
+    if (/[₪$€%°#+\-]/.test(ch)) return 'ET';
+    if (/[,.:\/]/.test(ch)) return 'CS';
+    return 'N'; };
+  const t = cl.map(typ), n = t.length;
+  // currency and percent signs next to a number belong to the number; so do separators inside it (4,500 05/06/2024)
+  for (let i = 0; i < n; i++) if (t[i] === 'ET') {
+    let j = i; while (j < n && t[j] === 'ET') j++;
+    const num = (i > 0 && t[i - 1] === 'EN') || (j < n && t[j] === 'EN');
+    for (let k = i; k < j; k++) t[k] = num ? 'EN' : 'N';
+    i = j - 1;
+  }
+  for (let i = 0; i < n; i++) if (t[i] === 'CS') t[i] = (i > 0 && i < n - 1 && t[i - 1] === 'EN' && t[i + 1] === 'EN') ? 'EN' : 'N';
+  // spaces and punctuation take the direction around them (numbers count as right-to-left here), else the line's
+  const base = rtl ? 'R' : 'L', strong = (x) => x === 'L' ? 'L' : 'R', res = t.slice();
+  for (let i = 0; i < n; i++) {
+    if (res[i] !== 'N') continue;
+    let j = i; while (j < n && t[j] === 'N') j++;
+    const before = i > 0 ? strong(res[i - 1]) : base, after = j < n ? strong(t[j]) : base;
+    for (let k = i; k < j; k++) res[k] = before === after ? before : base;
+    i = j - 1;
+  }
+  // embedding levels: odd levels read right to left
+  const level = (x) => rtl ? (x === 'R' ? 1 : 2) : (x === 'R' ? 1 : 0);
+  const runs = [];
+  cl.forEach((c, i) => { const lv = level(res[i]), r = runs[runs.length - 1]; if (r && r.lv === lv) r.c.push(c); else runs.push({ lv, c: [c] }); });
+  runs.forEach(r => { r.d = r.lv % 2 ? 'R' : 'L'; });
+  return rtl ? runs.reverse() : runs;
+}
+const MIRROR = { '(': ')', ')': '(', '[': ']', ']': '[', '{': '}', '}': '{', '<': '>', '>': '<' };
+function pdfFontFor(doc, fonts, fontKey, bold, subset) {
+  const fam = (FONTS[fontKey] || FONTS.heebo).family.toLowerCase().replace(/\s+/g, '-');
+  const path = `vendor/fonts/${fam}-${subset}-${fontWeight(fontKey, bold)}-normal.woff`;
+  if (!fonts.cache.has(path)) {
+    fonts.cache.set(path, fetch(path).then(r => r.ok ? r.arrayBuffer() : null)
+      .then(b => b ? doc.embedFont(b, { subset: true }) : null).catch(() => null));
+  }
+  return fonts.cache.get(path);
+}
+async function drawRealText(doc, page, st, fonts, ux, uy, th) {
+  const t = st.t, fx = t.fx || {}, img = st.img;
+  if (!t.text.trim() || fx.ls || !img.lines) return false;
+  for (const ch of t.text) if (ch !== '\n' && !HEB_CH.test(ch) && !LATIN_CH.test(ch)) return false;
+  const fk = await loadFontkit(); if (!fk) return false;
+  if (!fonts.registered) { doc.registerFontkit(fk); fonts.registered = true; }
+  const lines = t.text.split('\n'), rtl = isHebrew(t.text), size = t.size;
+  const need = new Set([...t.text.replace(/\n/g, '')].map(subsetOf));
+  const f = {};
+  for (const sub of need) { f[sub] = await pdfFontFor(doc, fonts, t.font, t.bold, sub); if (!f[sub]) return false; }
+  // measure every piece: Hebrew runs letter by letter, numbers and English in pieces of one font file
+  const plan = [];
+  try {
+    for (let i = 0; i < lines.length; i++) {
+      const runs = bidiRuns(lines[i], rtl).map(r => {
+        if (r.d === 'R') {
+          const cls = r.c.map(c => { const g = MIRROR[c] || c, sub = subsetOf(c[0]); return { s: g, sub, w: f[sub].widthOfTextAtSize(g, size) }; });
+          return { d: 'R', cls, w: cls.reduce((a, c) => a + c.w, 0) };
+        }
+        const segs = [];
+        for (const ch of r.c.join('')) { const sub = subsetOf(ch), last = segs[segs.length - 1]; if (last && last.sub === sub) last.s += ch; else segs.push({ sub, s: ch }); }
+        segs.forEach(sg => { sg.w = f[sg.sub].widthOfTextAtSize(sg.s, size); });
+        return { d: 'L', segs, w: segs.reduce((a, sg) => a + sg.w, 0) };
+      });
+      plan.push(runs);
+    }
+  } catch (_) { return false; }
+  const cos = Math.cos(th), sin = Math.sin(th), deg = th * 180 / Math.PI;
+  // a point inside the editor's picture of this text -> page coordinates
+  const at = (lx, ly) => { const dx = lx - img.w / 2, dy = img.h / 2 - ly; return [ux + dx * cos - dy * sin, uy + dx * sin + dy * cos]; };
+  const color = hexRgb(t.color), op = st.op, extra = img.padR - img.padL, lw = Math.max(0.5, size * 0.065);
+  const bar = (lx, ly, w, h, col) => { const [x, y] = at(lx, ly + h); page.drawRectangle({ x, y, width: w, height: h, rotate: degrees(deg), color: col, opacity: op, borderWidth: 0 }); };
+  const put = (s, sub, lx, by) => {
+    const [px, py] = at(lx, by);
+    page.drawText(s, { x: px, y: py, size, font: f[sub], color, opacity: op, rotate: degrees(deg), ySkew: fx.it ? degrees(11.3) : degrees(0) });
+  };
+  if (fx.hl) img.lines.forEach(L => { if (L.w) bar(L.x0 - img.pad * 0.6, L.by - size * 0.9, L.w + img.pad * 1.2 + extra, size * 1.15, hexRgb(fx.hl)); });
+  img.lines.forEach((L, i) => {
+    const runs = plan[i], total = runs.reduce((a, r) => a + r.w, 0);
+    const k = total ? L.w / total : 1;
+    let x = L.x0;
+    for (const r of runs) {
+      if (r.d === 'R') {
+        // letters in reading order, each one placed further to the left, so copying and searching
+        // give the Hebrew words the right way round in every PDF reader
+        let right = x + r.w * k;
+        for (const c of r.cls) { right -= c.w * k; put(c.s, c.sub, right, L.by); }
+      } else {
+        let xx = x;
+        for (const sg of r.segs) { put(sg.s, sg.sub, xx, L.by); xx += sg.w * k; }
+      }
+      x += r.w * k;
+    }
+    if (fx.u && L.w) bar(L.x0, L.by + size * 0.11, L.w, lw, color);
+    if (fx.st && L.w) bar(L.x0, L.by - size * 0.3, L.w + extra * 0.4, lw, color);
+  });
+  return true;
+}
+
 async function buildPdf(pages) {
   await ensureFontsFor(pages);
   const set = settings();
   const out = await PDFDocument.create();
   const srcDocs = new Map();
   const embedded = new Map();
+  const textFonts = { cache: new Map(), registered: false };
   for (let n = 0; n < pages.length; n++) {
     const p = pages[n];
     if (!srcDocs.has(p.src)) srcDocs.set(p.src, await PDFDocument.load(state.sources[p.src].bytes, { ignoreEncryption: true }));
@@ -735,6 +863,10 @@ async function buildPdf(pages) {
       page.drawRectangle({ x: r.x1, y: r.y1, width: r.x2 - r.x1, height: r.y2 - r.y1, color: hexRgb(r.color), borderWidth: 0 });
     }
     for (const st of stampList(p, pg, vp, n, pages.length, set)) {
+      if (st.t) {
+        const [tx, ty] = vp.convertToPdfPoint(st.cx, st.cy);
+        if (await drawRealText(out, page, st, textFonts, tx, ty, (st.a + R) * Math.PI / 180)) continue;
+      }
       let img = embedded.get(st.img.key);
       if (!img) {
         const src = st.img.src || st.img.canvas.toDataURL('image/png');
