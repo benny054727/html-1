@@ -16,7 +16,7 @@
 <meta name="apple-mobile-web-app-title" content="MY PDF">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <title>עורך MY PDF</title>
-<link rel="stylesheet" href="app.css?v=15">
+<link rel="stylesheet" href="app.css?v=16">
 </head>
 <body>
 
@@ -155,6 +155,13 @@
           <button class="iconbtn sm style-toggle" type="button" id="styleToggle" aria-expanded="false" title="עיצוב הטקסט"><span class="aa">Aa</span></button>
         </div>
       </div>
+      <div class="erase-tools" id="eraseTools" hidden>
+        <div class="seg wide" id="eraseSeg" role="group" aria-label="סוג המחיקה">
+          <button class="mode" type="button" data-erase="cover" aria-pressed="true">כיסוי בצבע הדף</button>
+          <button class="mode" type="button" data-erase="redact" aria-pressed="false"><svg class="i"><use href="#i-shield"/></svg>השחרה מאובטחת</button>
+        </div>
+        <p class="erase-note" id="eraseNote"></p>
+      </div>
       <p class="ed-hint" id="edHint"></p>
       <div class="ed-body" id="edBody" dir="ltr"><div class="stage" id="stage"></div></div>
       <div class="fmtbar objbar" id="objBar" role="toolbar" aria-label="עריכת פריט" hidden>
@@ -280,6 +287,7 @@
     <div class="field"><label for="fileName">שם הקובץ</label><input type="text" id="fileName" value="מסמך.pdf"></div>
     <button class="btn primary large" type="button" id="dlAllBtn"><svg class="i"><use href="#i-download"/></svg><span id="dlAllLabel">הורדת המסמך</span></button>
     <button class="btn large" type="button" id="shareBtn" hidden><svg class="i"><use href="#i-share"/></svg><span>שיתוף (וואטסאפ, מייל…)</span></button>
+    <label class="switch secure-row" id="dlSecureRow" hidden><input type="checkbox" id="dlSecure"><span><b>מחיקה מאובטחת</b> של כל טקסט שכוסה או הוחלף. עמודים עם כיסוי יישמרו כתמונה, כך שלא יישאר מתחתם שום מידע.</span></label>
     <button class="btn large" type="button" id="dlSelBtn" hidden><svg class="i"><use href="#i-cut"/></svg><span id="dlSelLabel">הורדת העמודים שנבחרו</span></button>
   </div>
 </dialog>
@@ -386,6 +394,6 @@
 
 <script src="vendor/pdf.min.js"></script>
 <script src="vendor/pdf-lib.min.js"></script>
-<script src="app.js?v=15"></script>
+<script src="app.js?v=16"></script>
 </body>
 </html>
