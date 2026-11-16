@@ -5,133 +5,224 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; worker-src 'self'; style-src 'self'; font-src 'self' data:; img-src 'self' blob: data:; connect-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'">
 <meta name="referrer" content="no-referrer">
+<meta name="theme-color" content="#0f6c72">
 <title>דפדף – עורך PDF</title>
-<link rel="stylesheet" href="app.css?v=8">
+<link rel="stylesheet" href="app.css?v=9">
 </head>
 <body>
-<div class="wrap">
-  <header class="top">
-    <div class="brand">
-      <div class="logo" aria-hidden="true">ד</div>
-      <div>
-        <h1>דפדף</h1>
-        <p>עורך PDF שעובד כולו בדפדפן. הקבצים לא נשלחים לשום שרת.</p>
-      </div>
+
+<!-- Icons -->
+<svg class="sprite" aria-hidden="true" focusable="false">
+  <symbol id="i-undo" viewBox="0 0 24 24"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></symbol>
+  <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></symbol>
+  <symbol id="i-more" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="12" cy="19" r="1.4"/></symbol>
+  <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="9" rx="1.5"/><rect x="3" y="15" width="7" height="6" rx="1.5"/><rect x="14" y="15" width="7" height="6" rx="1.5"/></symbol>
+  <symbol id="i-pencil" viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></symbol>
+  <symbol id="i-drop" viewBox="0 0 24 24"><path d="M12 2.7S6 9.2 6 14a6 6 0 0 0 12 0c0-4.8-6-11.3-6-11.3Z"/></symbol>
+  <symbol id="i-hash" viewBox="0 0 24 24"><path d="M4 9h16M4 15h16M10 3 8 21M16 3l-2 18"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-rotr" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></symbol>
+  <symbol id="i-rotl" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="13" height="13" rx="2"/><path d="M4 16V5a1 1 0 0 1 1-1h11"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="m6 6 1 14a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-14"/></symbol>
+  <symbol id="i-right" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></symbol>
+  <symbol id="i-left" viewBox="0 0 24 24"><path d="M19 12H5M11 6l-6 6 6 6"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+  <symbol id="i-type" viewBox="0 0 24 24"><path d="M4 7V5h16v2M12 5v14M9 19h6"/></symbol>
+  <symbol id="i-cursor" viewBox="0 0 24 24"><path d="M17 3h-2a3 3 0 0 0-3 3v12a3 3 0 0 0 3 3h2M7 3h2a3 3 0 0 1 3 3v12a3 3 0 0 1-3 3H7"/></symbol>
+  <symbol id="i-eraser" viewBox="0 0 24 24"><path d="m7 21-4-4a2 2 0 0 1 0-3L13 4a2 2 0 0 1 3 0l5 5a2 2 0 0 1 0 3l-9 9Z"/><path d="M7 21h14"/><path d="m9 11 6 6"/></symbol>
+  <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9Z"/><path d="M14 3v6h6"/><path d="M12 18v-6M9 15l3-3 3 3"/></symbol>
+  <symbol id="i-select" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="m8 12 3 3 5-6"/></symbol>
+  <symbol id="i-layers" viewBox="0 0 24 24"><path d="m12 3 9 5-9 5-9-5Z"/><path d="m3 13 9 5 9-5"/></symbol>
+  <symbol id="i-cut" viewBox="0 0 24 24"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M20 4 8.1 15.9M14.5 14.5 20 20M8.1 8.1 12 12"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/><path d="m9 12 2 2 4-4"/></symbol>
+  <symbol id="i-minus" viewBox="0 0 24 24"><path d="M5 12h14"/></symbol>
+  <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/></symbol>
+  <symbol id="i-restart" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></symbol>
+</svg>
+
+<input type="file" id="fileInput" accept="application/pdf,.pdf" multiple hidden>
+
+<!-- Start screen: no document yet -->
+<section class="home" id="home">
+  <header class="home-head">
+    <div class="logo" aria-hidden="true">ד</div>
+    <span class="home-name">דפדף</span>
+  </header>
+  <div class="home-main">
+    <h1>עורך PDF בעברית,<br>ישר מהדפדפן</h1>
+    <p class="lead"><svg class="i"><use href="#i-shield"/></svg> הקבצים נשארים אצלכם. שום דבר לא נשלח לשרת.</p>
+    <div class="drop" id="drop">
+      <svg class="i big"><use href="#i-file"/></svg>
+      <strong>גררו לכאן קובץ PDF</strong>
+      <button class="btn primary large" id="pickBtn" type="button">בחירת קבצים</button>
+      <button class="btn link" id="sampleBtn" type="button">או נסו קובץ לדוגמה</button>
     </div>
-    <div class="top-actions">
-      <button class="btn" id="undoBtn" disabled title="Ctrl+Z">↶ ביטול פעולה</button>
-      <button class="btn primary" id="downloadBtn" disabled>⬇ הורדת ה‑PDF</button>
+    <ul class="features">
+      <li><svg class="i"><use href="#i-pencil"/></svg><b>עריכה</b><span>הוספה ושינוי של טקסט בעברית, ומחיקת אזורים</span></li>
+      <li><svg class="i"><use href="#i-layers"/></svg><b>מיזוג</b><span>כמה קבצים הופכים לקובץ אחד</span></li>
+      <li><svg class="i"><use href="#i-grid"/></svg><b>סידור</b><span>סיבוב, שכפול, מחיקה ושינוי סדר</span></li>
+      <li><svg class="i"><use href="#i-cut"/></svg><b>פיצול</b><span>הורדה של העמודים שבחרתם בלבד</span></li>
+    </ul>
+  </div>
+</section>
+
+<!-- Working screen -->
+<div class="app" id="app" hidden>
+  <header class="appbar">
+    <div class="logo sm-logo" aria-hidden="true">ד</div>
+    <div class="doc">
+      <b id="docName">מסמך</b>
+      <span id="docMeta"></span>
     </div>
+    <button class="iconbtn" id="undoBtn" type="button" aria-label="ביטול פעולה" title="ביטול פעולה (Ctrl+Z)" disabled><svg class="i"><use href="#i-undo"/></svg></button>
+    <button class="iconbtn" id="moreBtn" type="button" aria-label="עוד פעולות"><svg class="i"><use href="#i-more"/></svg></button>
+    <button class="btn primary" id="downloadBtn" type="button"><svg class="i"><use href="#i-download"/></svg><span>הורדה</span></button>
   </header>
 
-  <section class="drop" id="drop">
-    <input type="file" id="fileInput" accept="application/pdf,.pdf" multiple hidden>
-    <strong id="dropTitle">גררו לכאן קובצי PDF</strong>
-    <div class="drop-row">
-      <button class="btn primary" id="pickBtn">בחירת קבצים</button>
-      <button class="btn link" id="sampleBtn">או נסו קובץ לדוגמה</button>
-    </div>
-    <div class="drop-help">
-      <div><b>מיזוג</b>כמה קבצים יחד הופכים לקובץ אחד</div>
-      <div><b>סידור ומחיקה</b>גרירה, חצים, סיבוב ושכפול עמודים</div>
-      <div><b>פיצול</b>בוחרים עמודים ומורידים רק אותם</div>
-      <div><b>טקסט וחותמת</b>הוספת טקסט בעברית, סימן מים ומספרי עמודים</div>
-    </div>
-  </section>
+  <main class="views">
+    <!-- Pages -->
+    <section class="view" id="pagesView" aria-label="עמודי המסמך">
+      <p class="grid-hint" id="gridHint">לחיצה על עמוד פותחת את הפעולות שלו. לחיצה ארוכה מתחילה בחירה של כמה עמודים.</p>
+      <div class="grid" id="grid"></div>
+    </section>
 
-  <section id="workspace" hidden>
-    <div class="toolbar" role="toolbar" aria-label="פעולות על עמודים">
-      <span class="count" id="countLabel"></span>
-      <button class="btn" id="selAllBtn">בחירת הכל</button>
-      <button class="btn" id="selNoneBtn">ניקוי בחירה</button>
-      <span class="sep"></span>
-      <button class="btn" id="rotLBtn" data-needsel>↺ סיבוב שמאלה</button>
-      <button class="btn" id="rotRBtn" data-needsel>↻ סיבוב ימינה</button>
-      <button class="btn" id="dupBtn" data-needsel>⧉ שכפול</button>
-      <button class="btn danger" id="delBtn" data-needsel>✕ מחיקה</button>
-      <span class="sep"></span>
-      <button class="btn" id="extractBtn" data-needsel>⬇ הורדת הנבחרים בלבד</button>
-      <button class="btn danger" id="clearBtn">התחלה מחדש</button>
-    </div>
-
-    <div class="layout">
-      <div class="grid" id="grid" aria-label="עמודי המסמך"></div>
-
-      <aside class="panel" aria-label="הגדרות לכל העמודים">
-        <h2>הגדרות לכל המסמך</h2>
-
-        <div class="group" id="wmGroup">
-          <label class="switch"><input type="checkbox" id="wmOn"> סימן מים</label>
-          <div class="field"><label for="wmText">טקסט</label><input type="text" id="wmText" value="טיוטה"></div>
-          <div class="row">
-            <div class="field"><label for="wmSize">גודל (נק׳)</label><input type="number" id="wmSize" value="72" min="8" max="300"></div>
-            <div class="field shrink"><label for="wmColor">צבע</label><input type="color" id="wmColor" value="#c0392b"></div>
-          </div>
-          <div class="field"><label for="wmOpacity">שקיפות: <span id="wmOpacityVal">25%</span></label><input type="range" id="wmOpacity" min="5" max="100" value="25"></div>
-          <div class="field"><label for="wmAngle">זווית</label>
-            <select id="wmAngle"><option value="45">אלכסון ↗</option><option value="-45">אלכסון ↘</option><option value="0">ישר</option></select>
-          </div>
+    <!-- Editor -->
+    <section class="view edit-view" id="editView" aria-label="עריכת עמוד" hidden>
+      <div class="ed-bar">
+        <div class="seg" id="edModes" role="group" aria-label="סוג עריכה">
+          <button class="mode" type="button" data-mode="text" aria-pressed="true"><svg class="i"><use href="#i-type"/></svg><span>הוספה</span></button>
+          <button class="mode" type="button" data-mode="edit" aria-pressed="false"><svg class="i"><use href="#i-cursor"/></svg><span>שינוי</span></button>
+          <button class="mode" type="button" data-mode="erase" aria-pressed="false"><svg class="i"><use href="#i-eraser"/></svg><span>מחיקה</span></button>
         </div>
-
-        <div class="group" id="pnGroup">
-          <label class="switch"><input type="checkbox" id="pnOn"> מספרי עמודים</label>
-          <div class="field"><label for="pnFmt">תבנית</label>
-            <select id="pnFmt">
-              <option value="n">3</option>
-              <option value="n/t">3 / 12</option>
-              <option value="he">עמוד 3 מתוך 12</option>
-              <option value="dash">– 3 –</option>
-            </select>
-          </div>
-          <div class="row">
-            <div class="field"><label for="pnPos">מיקום</label>
-              <select id="pnPos"><option value="bc">למטה במרכז</option><option value="br">למטה מימין</option><option value="bl">למטה משמאל</option><option value="tc">למעלה במרכז</option></select>
-            </div>
-            <div class="field w80"><label for="pnSize">גודל</label><input type="number" id="pnSize" value="11" min="6" max="48"></div>
-          </div>
-          <div class="field"><label for="pnStart">מספר ההתחלה</label><input type="number" id="pnStart" value="1" min="0" max="9999"></div>
+        <div class="zoom" role="group" aria-label="זום">
+          <button class="iconbtn sm" type="button" id="zoomOut" aria-label="הקטנה"><svg class="i"><use href="#i-minus"/></svg></button>
+          <button class="zlabel" type="button" id="zoomFit" title="התאמה למסך"><span id="zoomLabel">100%</span></button>
+          <button class="iconbtn sm" type="button" id="zoomIn" aria-label="הגדלה"><svg class="i"><use href="#i-plus"/></svg></button>
         </div>
-
-        <div class="group">
-          <div class="field"><label for="fileName">שם הקובץ להורדה</label><input type="text" id="fileName" value="מסמך.pdf"></div>
-          <p class="hint">טיפ: לחיצה על עמוד בוחרת אותו. ✎ פותח את עריכת העמוד: הוספת טקסט, שינוי טקסט קיים ומחיקת אזורים. גוררים עמוד כדי לשנות סדר. אפשר לגרור עוד קבצים לכל מקום בדף.</p>
+      </div>
+      <div class="ed-tools" id="edTextTools">
+        <div class="ed-row">
+          <input type="text" id="edText" value="" placeholder="כתבו טקסט ולחצו על העמוד" aria-label="טקסט">
+          <button class="iconbtn sm style-toggle" type="button" id="styleToggle" aria-expanded="false" aria-controls="edStyle" title="גופן, גודל וצבע"><span class="aa">Aa</span></button>
         </div>
-      </aside>
-    </div>
-  </section>
+        <div class="ed-row ed-style" id="edStyle">
+          <select id="edFont" aria-label="גופן"></select>
+          <input type="number" id="edSize" value="18" min="4" max="300" aria-label="גודל בנקודות" title="גודל (נק׳)">
+          <input type="color" id="edColor" value="#1a3fb0" aria-label="צבע">
+          <label class="chip"><input type="checkbox" id="edBold"><b>B</b></label>
+          <label class="chip" title="שומר את הטקסט על הקו של השורה ומצמיד טקסט חדש לשורות קרובות"><input type="checkbox" id="edLock" checked>יישור לשורה</label>
+        </div>
+      </div>
+      <p class="ed-hint" id="edHint"></p>
+      <div class="ed-body" id="edBody" dir="ltr"><div class="stage" id="stage"></div></div>
+      <div class="strip-wrap">
+        <button class="iconbtn sm" type="button" id="edPrev" aria-label="עמוד קודם"><svg class="i"><use href="#i-right"/></svg></button>
+        <div class="strip" id="strip" aria-label="מעבר בין עמודים"></div>
+        <button class="iconbtn sm" type="button" id="edNext" aria-label="עמוד הבא"><svg class="i"><use href="#i-left"/></svg></button>
+        <span class="ed-title" id="edTitle"></span>
+      </div>
+    </section>
+  </main>
+
+  <nav class="tabbar" id="tabbar" aria-label="כלים">
+    <button class="tab" type="button" data-tab="pages" aria-current="page"><svg class="i"><use href="#i-grid"/></svg><span>עמודים</span></button>
+    <button class="tab" type="button" data-tab="edit"><svg class="i"><use href="#i-pencil"/></svg><span>עריכה</span></button>
+    <button class="tab" type="button" data-tab="wm"><svg class="i"><use href="#i-drop"/></svg><span>סימן מים</span><i class="dot-on" id="wmDot" hidden></i></button>
+    <button class="tab" type="button" data-tab="pn"><svg class="i"><use href="#i-hash"/></svg><span>מספור</span><i class="dot-on" id="pnDot" hidden></i></button>
+  </nav>
+
+  <div class="selbar" id="selbar" hidden>
+    <button class="iconbtn" type="button" id="selDone" aria-label="סיום בחירה"><svg class="i"><use href="#i-x"/></svg></button>
+    <span class="sel-count" id="selCount">0 נבחרו</span>
+    <button class="selact" type="button" id="selAllBtn"><svg class="i"><use href="#i-select"/></svg><span>הכל</span></button>
+    <button class="selact" type="button" id="rotRBtn" data-needsel><svg class="i"><use href="#i-rotr"/></svg><span>סיבוב</span></button>
+    <button class="selact" type="button" id="dupBtn" data-needsel><svg class="i"><use href="#i-copy"/></svg><span>שכפול</span></button>
+    <button class="selact" type="button" id="extractBtn" data-needsel><svg class="i"><use href="#i-download"/></svg><span>הורדה</span></button>
+    <button class="selact danger" type="button" id="delBtn" data-needsel><svg class="i"><use href="#i-trash"/></svg><span>מחיקה</span></button>
+  </div>
 </div>
 
-<dialog id="editor" aria-labelledby="edTitle">
-  <div class="ed-head">
-    <h3 id="edTitle">עריכת עמוד</h3>
-    <div class="ed-nav">
-      <button class="btn nav" type="button" id="edPrev" aria-label="עמוד קודם">→<span class="lg"> עמוד קודם</span></button>
-      <button class="btn nav" type="button" id="edNext" aria-label="עמוד הבא"><span class="lg">עמוד הבא </span>←</button>
-      <button class="btn primary" type="button" id="edClose">סיום</button>
+<!-- Bottom sheets -->
+<dialog class="sheet-dlg" id="pageSheet" aria-labelledby="psTitle">
+  <div class="sh-grab" aria-hidden="true"></div>
+  <div class="ps-head">
+    <div class="ps-thumb" id="psThumb"></div>
+    <div class="ps-info">
+      <h2 id="psTitle">עמוד</h2>
+      <span id="psMeta"></span>
+    </div>
+    <button class="iconbtn" type="button" data-close aria-label="סגירה"><svg class="i"><use href="#i-x"/></svg></button>
+  </div>
+  <div class="ps-actions">
+    <button class="act primary-act" type="button" data-act="edit"><svg class="i"><use href="#i-pencil"/></svg><span>עריכה</span></button>
+    <button class="act" type="button" data-act="rotl"><svg class="i"><use href="#i-rotl"/></svg><span>סיבוב שמאלה</span></button>
+    <button class="act" type="button" data-act="rotr"><svg class="i"><use href="#i-rotr"/></svg><span>סיבוב ימינה</span></button>
+    <button class="act" type="button" data-act="dup"><svg class="i"><use href="#i-copy"/></svg><span>שכפול</span></button>
+    <button class="act" type="button" data-act="left"><svg class="i"><use href="#i-right"/></svg><span>הזזה קדימה</span></button>
+    <button class="act" type="button" data-act="right"><svg class="i"><use href="#i-left"/></svg><span>הזזה אחורה</span></button>
+    <button class="act" type="button" data-act="select"><svg class="i"><use href="#i-select"/></svg><span>בחירה</span></button>
+    <button class="act danger" type="button" data-act="del"><svg class="i"><use href="#i-trash"/></svg><span>מחיקה</span></button>
+  </div>
+</dialog>
+
+<dialog class="sheet-dlg" id="wmSheet" aria-labelledby="wmTitle">
+  <div class="sh-grab" aria-hidden="true"></div>
+  <div class="sh-head"><h2 id="wmTitle">סימן מים</h2><button class="iconbtn" type="button" data-close aria-label="סגירה"><svg class="i"><use href="#i-x"/></svg></button></div>
+  <div class="sh-body" id="wmGroup">
+    <label class="switch"><input type="checkbox" id="wmOn"><span>הוספת סימן מים לכל העמודים</span></label>
+    <div class="field"><label for="wmText">טקסט</label><input type="text" id="wmText" value="טיוטה"></div>
+    <div class="row">
+      <div class="field"><label for="wmSize">גודל (נק׳)</label><input type="number" id="wmSize" value="72" min="8" max="300"></div>
+      <div class="field shrink"><label for="wmColor">צבע</label><input type="color" id="wmColor" value="#c0392b"></div>
+      <div class="field"><label for="wmAngle">זווית</label>
+        <select id="wmAngle"><option value="45">אלכסון ↗</option><option value="-45">אלכסון ↘</option><option value="0">ישר</option></select>
+      </div>
+    </div>
+    <div class="field"><label for="wmOpacity">שקיפות: <span id="wmOpacityVal">25%</span></label><input type="range" id="wmOpacity" min="5" max="100" value="25"></div>
+  </div>
+</dialog>
+
+<dialog class="sheet-dlg" id="pnSheet" aria-labelledby="pnTitle">
+  <div class="sh-grab" aria-hidden="true"></div>
+  <div class="sh-head"><h2 id="pnTitle">מספרי עמודים</h2><button class="iconbtn" type="button" data-close aria-label="סגירה"><svg class="i"><use href="#i-x"/></svg></button></div>
+  <div class="sh-body" id="pnGroup">
+    <label class="switch"><input type="checkbox" id="pnOn"><span>הוספת מספרי עמודים</span></label>
+    <div class="field"><label for="pnFmt">תבנית</label>
+      <select id="pnFmt">
+        <option value="n">3</option>
+        <option value="n/t">3 / 12</option>
+        <option value="he">עמוד 3 מתוך 12</option>
+        <option value="dash">– 3 –</option>
+      </select>
+    </div>
+    <div class="row">
+      <div class="field"><label for="pnPos">מיקום</label>
+        <select id="pnPos"><option value="bc">למטה במרכז</option><option value="br">למטה מימין</option><option value="bl">למטה משמאל</option><option value="tc">למעלה במרכז</option></select>
+      </div>
+      <div class="field"><label for="pnSize">גודל</label><input type="number" id="pnSize" value="11" min="6" max="48"></div>
+      <div class="field"><label for="pnStart">מתחיל מ־</label><input type="number" id="pnStart" value="1" min="0" max="9999"></div>
     </div>
   </div>
-  <div class="ed-modes" id="edModes" role="group" aria-label="סוג עריכה">
-    <button class="mode" type="button" data-mode="text" aria-pressed="true">✎ <span class="lg">הוספת טקסט</span><span class="sm">הוספה</span></button>
-    <button class="mode" type="button" data-mode="edit" aria-pressed="false">✐ <span class="lg">שינוי טקסט קיים</span><span class="sm">שינוי</span></button>
-    <button class="mode" type="button" data-mode="erase" aria-pressed="false">⌫ <span class="lg">מחיקת אזור</span><span class="sm">מחיקה</span></button>
-    <div class="zoom" role="group" aria-label="זום">
-      <button class="zbtn" type="button" id="zoomOut" aria-label="הקטנה">−</button>
-      <span class="zlabel" id="zoomLabel" aria-live="polite">100%</span>
-      <button class="zbtn" type="button" id="zoomIn" aria-label="הגדלה">+</button>
-      <button class="zbtn fit" type="button" id="zoomFit">התאמה למסך</button>
-    </div>
+</dialog>
+
+<dialog class="sheet-dlg" id="dlSheet" aria-labelledby="dlTitle">
+  <div class="sh-grab" aria-hidden="true"></div>
+  <div class="sh-head"><h2 id="dlTitle">הורדת הקובץ</h2><button class="iconbtn" type="button" data-close aria-label="סגירה"><svg class="i"><use href="#i-x"/></svg></button></div>
+  <div class="sh-body">
+    <div class="field"><label for="fileName">שם הקובץ</label><input type="text" id="fileName" value="מסמך.pdf"></div>
+    <button class="btn primary large" type="button" id="dlAllBtn"><svg class="i"><use href="#i-download"/></svg><span id="dlAllLabel">הורדת המסמך</span></button>
+    <button class="btn large" type="button" id="dlSelBtn" hidden><svg class="i"><use href="#i-cut"/></svg><span id="dlSelLabel">הורדת העמודים שנבחרו</span></button>
   </div>
-  <div class="ed-tools" id="edTextTools">
-    <div class="field grow"><label for="edText">טקסט</label><input type="text" id="edText" value="" placeholder="כתבו טקסט ולחצו על העמוד"></div>
-    <div class="field"><label for="edFont">גופן</label><select id="edFont"></select></div>
-    <div class="field"><label for="edSize">גודל (נק׳)</label><input type="number" id="edSize" value="18" min="4" max="300"></div>
-    <div class="field"><label for="edColor">צבע</label><input type="color" id="edColor" value="#1a3fb0"></div>
-    <label class="switch pb"><input type="checkbox" id="edBold"> <span class="lg">מודגש</span><b class="sm">B</b></label>
-    <label class="switch pb" title="שומר את הטקסט על הקו של השורה המקורית ומצמיד טקסט חדש לשורות קרובות"><input type="checkbox" id="edLock" checked> יישור לשורה</label>
-  </div>
-  <div class="ed-body" id="edBody" dir="ltr"><div class="stage" id="stage"></div></div>
-  <div class="ed-foot">
-    <p class="hint" id="edHint">כתבו טקסט בשדה למעלה ולחצו על העמוד כדי להוסיף אותו.</p>
+</dialog>
+
+<dialog class="sheet-dlg" id="moreSheet" aria-label="עוד פעולות">
+  <div class="sh-grab" aria-hidden="true"></div>
+  <div class="menu">
+    <button type="button" id="addFilesBtn"><svg class="i"><use href="#i-plus"/></svg>הוספת קובץ PDF למסמך</button>
+    <button type="button" id="startSelBtn"><svg class="i"><use href="#i-select"/></svg>בחירת כמה עמודים</button>
+    <button type="button" class="danger" id="clearBtn"><svg class="i"><use href="#i-restart"/></svg>התחלה מחדש עם קובץ אחר</button>
   </div>
 </dialog>
 
@@ -140,6 +231,6 @@
 
 <script src="vendor/pdf.min.js"></script>
 <script src="vendor/pdf-lib.min.js"></script>
-<script src="app.js?v=8"></script>
+<script src="app.js?v=9"></script>
 </body>
 </html>
