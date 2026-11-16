@@ -53,6 +53,9 @@ function settings() {
 let toastTimer;
 function toast(msg, ms = 2600) {
   const t = $('toast'); t.textContent = msg; t.hidden = false;
+  // the editor is a modal in the top layer, so show messages inside it while it is open
+  const host = $('editor').open ? $('editor') : document.body;
+  if (t.parentElement !== host) host.appendChild(t);
   clearTimeout(toastTimer); toastTimer = setTimeout(() => t.hidden = true, ms);
 }
 function busy(on, text) { $('busy').hidden = !on; if (text) $('busyText').textContent = text; }
@@ -535,7 +538,7 @@ function setMode(m) {
 async function drawEditor() {
   const p = edPage(); if (!p) return;
   const n = idxOf(p.id);
-  $('edTitle').textContent = `עריכת עמוד ${n + 1} מתוך ${state.pages.length}`;
+  $('edTitle').innerHTML = `<span class="lg">עריכת עמוד ${n + 1} מתוך ${state.pages.length}</span><span class="sm">עמוד ${n + 1}/${state.pages.length}</span>`;
   $('edPrev').disabled = n <= 0; $('edNext').disabled = n >= state.pages.length - 1;
   const pg = await getPage(p.src, p.idx);
   const R = totalRot(pg, p);
@@ -556,9 +559,11 @@ async function drawEditor() {
 }
 function computeFit() {
   const body = $('edBody');
-  const availW = Math.max(200, Math.min(900, (body.clientWidth || window.innerWidth) - 32));
+  const phone = window.innerWidth <= 600;
+  const availW = Math.max(200, Math.min(900, (body.clientWidth || window.innerWidth) - (phone ? 16 : 32)));
   const availH = Math.max(280, (body.clientHeight || window.innerHeight - 300) - 32);
-  ed.fit = Math.min(availW / ed.base.width, availH / ed.base.height, 2.5);
+  // On a phone the page fills the screen width (scroll down for the rest); elsewhere the whole page fits
+  ed.fit = phone ? availW / ed.base.width : Math.min(availW / ed.base.width, availH / ed.base.height, 2.5);
 }
 /* Size the page for the current zoom; the old bitmap is stretched until the sharp one is ready */
 function layoutEditor() {

@@ -6,7 +6,7 @@
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; worker-src 'self'; style-src 'self'; font-src 'self' data:; img-src 'self' blob: data:; connect-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'">
 <meta name="referrer" content="no-referrer">
 <title>דפדף – עורך PDF</title>
-<link rel="stylesheet" href="app.css">
+<link rel="stylesheet" href="app.css?v=4">
 </head>
 <body>
 <div class="wrap">
@@ -104,7 +104,11 @@
 <dialog id="editor" aria-labelledby="edTitle">
   <div class="ed-head">
     <h3 id="edTitle">עריכת עמוד</h3>
-    <button class="btn" id="edClose">סיום</button>
+    <div class="ed-nav">
+      <button class="btn nav" type="button" id="edPrev" aria-label="עמוד קודם">→<span class="lg"> עמוד קודם</span></button>
+      <button class="btn nav" type="button" id="edNext" aria-label="עמוד הבא"><span class="lg">עמוד הבא </span>←</button>
+      <button class="btn primary" type="button" id="edClose">סיום</button>
+    </div>
   </div>
   <div class="ed-modes" id="edModes" role="group" aria-label="סוג עריכה">
     <button class="mode" type="button" data-mode="text" aria-pressed="true">✎ <span class="lg">הוספת טקסט</span><span class="sm">הוספה</span></button>
@@ -118,15 +122,14 @@
     </div>
   </div>
   <div class="ed-tools" id="edTextTools">
-    <div class="field grow"><label for="edText">טקסט</label><input type="text" id="edText" value="" placeholder="כתבו כאן טקסט ואז לחצו על העמוד"></div>
+    <div class="field grow"><label for="edText">טקסט</label><input type="text" id="edText" value="" placeholder="כתבו טקסט ולחצו על העמוד"></div>
     <div class="field"><label for="edSize">גודל (נק׳)</label><input type="number" id="edSize" value="18" min="4" max="300"></div>
     <div class="field"><label for="edColor">צבע</label><input type="color" id="edColor" value="#1a3fb0"></div>
-    <label class="switch pb"><input type="checkbox" id="edBold"> מודגש</label>
+    <label class="switch pb"><input type="checkbox" id="edBold"> <span class="lg">מודגש</span><b class="sm">B</b></label>
   </div>
   <div class="ed-body" id="edBody" dir="ltr"><div class="stage" id="stage"></div></div>
   <div class="ed-foot">
     <p class="hint" id="edHint">כתבו טקסט בשדה למעלה ולחצו על העמוד כדי להוסיף אותו.</p>
-    <div class="row"><button class="btn" id="edPrev">→ עמוד קודם</button><button class="btn" id="edNext">עמוד הבא ←</button></div>
   </div>
 </dialog>
 
@@ -135,6 +138,6 @@
 
 <script src="vendor/pdf.min.js"></script>
 <script src="vendor/pdf-lib.min.js"></script>
-<script src="app.js"></script>
+<script src="app.js?v=4"></script>
 </body>
 </html>
