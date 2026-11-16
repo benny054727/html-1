@@ -3,16 +3,34 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; worker-src 'self'; style-src 'self'; font-src 'self' data:; img-src 'self' blob: data:; connect-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; worker-src 'self'; style-src 'self'; font-src 'self' data:; img-src 'self' blob: data:; connect-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'; manifest-src 'self'">
 <meta name="referrer" content="no-referrer">
-<meta name="theme-color" content="#0f6c72">
-<title>דפדף – עורך PDF</title>
-<link rel="stylesheet" href="app.css?v=10">
+<meta name="theme-color" content="#0f766e">
+<meta name="description" content="עורך MY PDF – עריכת PDF בעברית ישר מהטלפון או מהמחשב. הקבצים לא נשלחים לשום שרת.">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
+<link rel="icon" type="image/png" sizes="48x48" href="icons/favicon-48.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="MY PDF">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<title>עורך MY PDF</title>
+<link rel="stylesheet" href="app.css?v=11">
 </head>
 <body>
 
 <!-- Icons -->
 <svg class="sprite" aria-hidden="true" focusable="false">
+  <defs><linearGradient id="lgBg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#14b8a6"/><stop offset="1" stop-color="#0f5f66"/></linearGradient></defs>
+  <symbol id="logo" viewBox="0 0 100 100">
+    <rect width="100" height="100" rx="22" fill="url(#lgBg)"/>
+    <rect x="22" y="16" width="48" height="64" rx="6" fill="#ffffff"/>
+    <text x="46" y="50" text-anchor="middle" font-family="Tinos, Georgia, serif" font-style="italic" font-weight="700" font-size="22" fill="#0f766e">my</text>
+    <text x="46" y="67" text-anchor="middle" font-family="Arimo, Arial, sans-serif" font-weight="700" font-size="12" fill="#0f766e" letter-spacing="1.5">PDF</text>
+    <g transform="rotate(40 74 66)"><rect x="69" y="38" width="10" height="38" rx="2" fill="#fbbf24"/><path d="M69 76h10l-5 10Z" fill="#fde68a"/><path d="M72.5 82h3l-1.5 4Z" fill="#1f2937"/><rect x="69" y="38" width="10" height="6" rx="2" fill="#f87171"/></g>
+  </symbol>
+  <symbol id="i-install" viewBox="0 0 24 24"><rect x="6" y="2" width="12" height="20" rx="2.5"/><path d="M12 7v7M9 11l3 3 3-3"/><path d="M10 18.5h4"/></symbol>
   <symbol id="i-undo" viewBox="0 0 24 24"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></symbol>
   <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></symbol>
   <symbol id="i-more" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="12" cy="19" r="1.4"/></symbol>
@@ -47,19 +65,19 @@
 
 <!-- Start screen: no document yet -->
 <section class="home" id="home">
-  <header class="home-head">
-    <div class="logo" aria-hidden="true">ד</div>
-    <span class="home-name">דפדף</span>
-  </header>
   <div class="home-main">
-    <h1>עורך PDF בעברית,<br>ישר מהדפדפן</h1>
-    <p class="lead"><svg class="i"><use href="#i-shield"/></svg> הקבצים נשארים אצלכם. שום דבר לא נשלח לשרת.</p>
+    <svg class="home-logo" viewBox="0 0 100 100" role="img" aria-label="הלוגו של עורך MY PDF"><use href="#logo"/></svg>
+    <h1>עורך <span class="ltr">MY PDF</span></h1>
+    <p class="lead">עריכת PDF בעברית, ישר מהטלפון או מהמחשב</p>
+    <p class="privacy"><svg class="i"><use href="#i-shield"/></svg> הקבצים נשארים אצלכם. שום דבר לא נשלח לשרת.</p>
     <div class="drop" id="drop">
       <svg class="i big"><use href="#i-file"/></svg>
       <strong>גררו לכאן קובץ PDF</strong>
       <button class="btn primary large" id="pickBtn" type="button">בחירת קבצים</button>
       <button class="btn link" id="sampleBtn" type="button">או נסו קובץ לדוגמה</button>
     </div>
+    <button class="install-cta" id="installBtn" type="button" hidden><svg class="i"><use href="#i-install"/></svg><span><b>התקנת האפליקציה</b><small>הוספה למסך הבית, עובדת גם בלי אינטרנט</small></span></button>
+    <p class="ios-hint" id="iosHint" hidden>להתקנה באייפון: לוחצים על <b>שיתוף</b> ואז על <b>"הוספה למסך הבית"</b>.</p>
     <ul class="features">
       <li><svg class="i"><use href="#i-pencil"/></svg><b>עריכה</b><span>הוספה ושינוי של טקסט בעברית, ומחיקת אזורים</span></li>
       <li><svg class="i"><use href="#i-layers"/></svg><b>מיזוג</b><span>כמה קבצים הופכים לקובץ אחד</span></li>
@@ -72,7 +90,7 @@
 <!-- Working screen -->
 <div class="app" id="app" hidden>
   <header class="appbar">
-    <div class="logo sm-logo" aria-hidden="true">ד</div>
+    <svg class="app-logo" viewBox="0 0 100 100" aria-hidden="true"><use href="#logo"/></svg>
     <div class="doc">
       <b id="docName">מסמך</b>
       <span id="docMeta"></span>
@@ -232,6 +250,7 @@
 <dialog class="sheet-dlg" id="moreSheet" aria-label="עוד פעולות">
   <div class="sh-grab" aria-hidden="true"></div>
   <div class="menu">
+    <button type="button" id="installMenuBtn" hidden><svg class="i"><use href="#i-install"/></svg>התקנת האפליקציה למסך הבית</button>
     <button type="button" id="addFilesBtn"><svg class="i"><use href="#i-plus"/></svg>הוספת קובץ PDF למסמך</button>
     <button type="button" id="startSelBtn"><svg class="i"><use href="#i-select"/></svg>בחירת כמה עמודים</button>
     <button type="button" class="danger" id="clearBtn"><svg class="i"><use href="#i-restart"/></svg>התחלה מחדש עם קובץ אחר</button>
@@ -280,6 +299,6 @@
 
 <script src="vendor/pdf.min.js"></script>
 <script src="vendor/pdf-lib.min.js"></script>
-<script src="app.js?v=10"></script>
+<script src="app.js?v=11"></script>
 </body>
 </html>
