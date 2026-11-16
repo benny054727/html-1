@@ -81,14 +81,50 @@ const textImgCache = new Map();
 const measureCtx = document.createElement('canvas').getContext('2d');
 /* Fonts bundled with the app. Each has Hebrew and Latin letters and digits.
    Arimo and Tinos have the same letter widths as Arial and Times New Roman. */
+const FONT_GROUPS = ['דומים לגופני Word', 'עבריים קלאסיים', 'מודרניים', 'כתב יד ומיוחדים'];
 const FONTS = {
-  heebo:  { label: 'Heebo (מודרני)', family: 'Heebo' },
-  arimo:  { label: 'Arial (אריאל)', family: 'Arimo' },
-  tinos:  { label: 'Times New Roman', family: 'Tinos' },
-  david:  { label: 'David (דוד)', family: 'David Libre' },
-  frank:  { label: 'Frank Ruehl (פרנק רוהל)', family: 'Frank Ruhl Libre' },
-  miriam: { label: 'Miriam (מרים)', family: 'Miriam Libre' },
+  arimo:     { g: 0, label: 'Arial (אריאל)', family: 'Arimo' },
+  tinos:     { g: 0, label: 'Times New Roman', family: 'Tinos' },
+  cousine:   { g: 0, label: 'Courier New (מכונת כתיבה)', family: 'Cousine' },
+  david:     { g: 0, label: 'David (דוד)', family: 'David Libre' },
+  frank:     { g: 0, label: 'Frank Ruehl (פרנק רוהל)', family: 'Frank Ruhl Libre' },
+  miriam:    { g: 0, label: 'Miriam (מרים)', family: 'Miriam Libre' },
+  alef:      { g: 0, label: 'אלף (Alef)', family: 'Alef' },
+  notoserif: { g: 1, label: 'נוטו סריף (Noto Serif)', family: 'Noto Serif Hebrew' },
+  bellefair: { g: 1, label: 'בלפייר (Bellefair)', family: 'Bellefair' },
+  bonanova:  { g: 1, label: 'בונה נובה (Bona Nova)', family: 'Bona Nova' },
+  rashi:     { g: 1, label: 'כתב רש״י (Noto Rashi)', family: 'Noto Rashi Hebrew' },
+  heebo:     { g: 2, label: 'Heebo (היבו)', family: 'Heebo' },
+  assistant: { g: 2, label: 'Assistant (אסיסטנט)', family: 'Assistant' },
+  rubik:     { g: 2, label: 'Rubik (רוביק)', family: 'Rubik' },
+  opensans:  { g: 2, label: 'Open Sans', family: 'Open Sans' },
+  notosans:  { g: 2, label: 'Noto Sans (נוטו)', family: 'Noto Sans Hebrew' },
+  plex:      { g: 2, label: 'IBM Plex (פלקס)', family: 'IBM Plex Sans Hebrew' },
+  varela:    { g: 2, label: 'Varela Round (מעוגל)', family: 'Varela Round' },
+  fredoka:   { g: 2, label: 'Fredoka (פרדוקה)', family: 'Fredoka' },
+  secular:   { g: 2, label: 'Secular One (כותרות)', family: 'Secular One' },
+  suez:      { g: 2, label: 'Suez One (כותרות)', family: 'Suez One' },
+  playpen:   { g: 3, label: 'כתב יד (Playpen)', family: 'Playpen Sans Hebrew' },
+  amatic:    { g: 3, label: 'כתב יד צר (Amatic)', family: 'Amatic SC' },
+  gveret:    { g: 3, label: 'גברת לוין (כתב יד)', family: 'Gveret Levin' },
+  karantina: { g: 3, label: 'קרנטינה (Karantina)', family: 'Karantina' },
+  solitreo:  { g: 3, label: 'סוליטראו (Solitreo)', family: 'Solitreo' },
 };
+/* Fonts download only when they are first used */
+const fontReady = new Map();
+function ensureFont(k) {
+  const f = FONTS[k]; if (!f || !document.fonts || !document.fonts.load) return Promise.resolve();
+  if (!fontReady.has(k)) {
+    fontReady.set(k, Promise.allSettled([400, 700].map(w => document.fonts.load(`${w} 20px "${f.family}"`, 'אבג abc 123')))
+      .then(() => { textImgCache.clear(); thumbCache.clear(); }));
+  }
+  return fontReady.get(k);
+}
+function ensureFontsFor(pages) {
+  const keys = new Set(['heebo']);
+  for (const p of pages) for (const o of p.overlays) keys.add(o.font || 'heebo');
+  return Promise.all([...keys].map(ensureFont));
+}
 const fontStack = (k) => `"${(FONTS[k] || FONTS.heebo).family}", Heebo, Arial, sans-serif`;
 
 /* The text is drawn into an image with a known baseline (asc from the top), so it can sit exactly on a line */
@@ -470,6 +506,7 @@ function onSettings() {
 
 /* ---------- Export ---------- */
 async function buildPdf(pages) {
+  await ensureFontsFor(pages);
   const set = settings();
   const out = await PDFDocument.create();
   const srcDocs = new Map();
@@ -571,6 +608,7 @@ async function drawEditor() {
   computeFit();
   if (pageChanged) { $('stage').querySelector('canvas')?.remove(); ed.canvas = null; }
   layoutEditor();
+  ensureFontsFor([p]).then(() => { if (ed.pid === p.id) drawOverlays(); });
   await renderBitmap();
 }
 function computeFit() {
@@ -763,10 +801,20 @@ function guessFont(it) {
   const bold = !!(fobj && (fobj.bold || fobj.black)) || /bold|black|heavy|demi/.test(n);
   let font = 'arimo';
   if (/david/.test(n)) font = 'david';
+  else if (/courier|cousine|mono/.test(n)) font = 'cousine';
+  else if (/alef/.test(n)) font = 'alef';
+  else if (/assistant/.test(n)) font = 'assistant';
+  else if (/rubik/.test(n)) font = 'rubik';
+  else if (/opensans|open sans/.test(n)) font = 'opensans';
+  else if (/notoserif/.test(n)) font = 'notoserif';
+  else if (/notosans/.test(n)) font = 'notosans';
+  else if (/varela/.test(n)) font = 'varela';
+  else if (/plex/.test(n)) font = 'plex';
   else if (/frank|ruehl|ruhl/.test(n)) font = 'frank';
   else if (/miriam/.test(n)) font = 'miriam';
   else if (/times|tinos|roman|narkis|georgia|garamond|cambria|serif(?!.*sans)/.test(n) && !/sans/.test(n)) font = 'tinos';
-  else if (/heebo|rubik|assistant|open ?sans|segoe|calibri/.test(n)) font = 'heebo';
+  else if (/heebo|segoe|calibri/.test(n)) font = 'heebo';
+  ensureFont(font).then(() => { if ($('editor').open) drawOverlays(); });
   return { font, bold };
 }
 function replaceItem(p, it) {
@@ -990,14 +1038,12 @@ $('edPrev').onclick = () => { const n = idxOf(ed.pid); if (n > 0) openEditor(sta
 $('edNext').onclick = () => { const n = idxOf(ed.pid); if (n < state.pages.length - 1) openEditor(state.pages[n + 1].id); };
 window.addEventListener('resize', () => { if ($('editor').open && ed.pg) { clearTimeout(ed.rt); ed.rt = setTimeout(() => { computeFit(); layoutEditor(); scheduleRender(); }, 200); } });
 
-$('edFont').innerHTML = Object.entries(FONTS).map(([k, f]) => `<option value="${k}">${f.label}</option>`).join('');
-/* Make sure every font (Hebrew, Latin and digits) is ready before text is drawn into images */
-if (document.fonts && document.fonts.load) {
-  const loads = [];
-  for (const f of Object.values(FONTS)) for (const w of [400, 700]) loads.push(document.fonts.load(`${w} 20px "${f.family}"`, 'אבג abc 123'));
-  Promise.allSettled(loads)
-    .then(() => { textImgCache.clear(); thumbCache.clear(); if (state.pages.length) renderGrid(); if ($('editor').open) drawOverlays(); });
-}
+$('edFont').innerHTML = FONT_GROUPS.map((g, i) =>
+  `<optgroup label="${g}">` + Object.entries(FONTS).filter(([, f]) => f.g === i).map(([k, f]) => `<option value="${k}">${f.label}</option>`).join('') + '</optgroup>'
+).join('');
+$('edFont').value = 'heebo';
+$('edFont').addEventListener('change', () => ensureFont($('edFont').value).then(() => { if ($('editor').open) drawOverlays(); }));
+ensureFont('heebo').then(() => { if (state.pages.length) renderGrid(); });
 onSettings();
 renderGrid();
 })();
