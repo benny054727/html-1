@@ -18,6 +18,8 @@ const state = {
   sources: [],   // {name, bytes, pdf, cache: Map}
   pages: [],     // {id, src, idx, rot, overlays:[{id,text,size,color,bold,px,py,ang}]}
   selected: new Set(),
+  fields: {},    // source index -> Map(page index -> [form fields])
+  forms: {},     // source index -> { field name: value }
 };
 let uid = 1;
 const persisted = new Set();   // keys of files and pictures already in device storage
@@ -166,6 +168,7 @@ function ensureFont(k) {
 }
 function ensureFontsFor(pages) {
   const keys = new Set(['heebo']);
+  if (pages.some(p => pageFields(p).length)) keys.add('arimo');
   for (const p of pages) for (const o of p.overlays) keys.add(o.font || 'heebo');
   return Promise.all([...keys].map(ensureFont));
 }
@@ -253,6 +256,166 @@ function drawRects(ctx, p, vp) {
 }
 const hexRgb = (hex) => { const n = parseInt(hex.slice(1), 16); return rgb((n >> 16 & 255) / 255, (n >> 8 & 255) / 255, (n & 255) / 255); };
 
+/* ---------- Form fields ---------- */
+const FORMS_OFF = pdfjsLib.AnnotationMode ? pdfjsLib.AnnotationMode.ENABLE_FORMS : 2;   // pages are drawn without the form layer
+async function loadFormFields(src) {
+  const s = state.sources[src], byPage = new Map();
+  let count = 0;
+  const names = new Set();
+  for (let i = 0; i < s.pdf.numPages; i++) {
+    let annots = [];
+    try { annots = await (await s.pdf.getPage(i + 1)).getAnnotations({ intent: 'display' }); } catch (_) {}
+    const list = annots.filter(a => a.annotationType === 20 && a.fieldName && !a.hidden && !a.pushButton &&
+      (a.fieldType === 'Tx' || a.fieldType === 'Ch' || (a.fieldType === 'Btn' && (a.checkBox || a.radioButton))))
+      .map(a => ({
+        name: a.fieldName, type: a.fieldType === 'Tx' ? 'text' : a.fieldType === 'Ch' ? 'choice' : a.checkBox ? 'check' : 'radio',
+        rect: a.rect, ro: !!a.readOnly, multi: !!a.multiLine, maxLen: a.maxLen || 0, align: a.textAlignment || 0,
+        size: (a.defaultAppearanceData && a.defaultAppearanceData.fontSize) || 0,
+        on: a.exportValue || a.buttonValue || 'Yes', options: (a.options || []).map(o => ({ v: o.exportValue, t: o.displayValue })),
+        initial: a.fieldValue,
+      }));
+    if (list.length) byPage.set(i, list);
+    for (const f of list) {
+      names.add(f.name);
+      const vals = state.forms[src] || (state.forms[src] = {});
+      if (!(f.name in vals)) {
+        if (f.type === 'check') vals[f.name] = f.initial != null && f.initial !== 'Off' && f.initial !== '' && (f.initial === f.on || f.initial === true);
+        else if (f.type === 'radio') vals[f.name] = f.initial && f.initial !== 'Off' ? String(f.initial) : '';
+        else vals[f.name] = Array.isArray(f.initial) ? (f.initial[0] || '') : (f.initial || '');
+      }
+    }
+  }
+  state.fields[src] = byPage;
+  if (names.size) { await ensureFont('arimo'); thumbCache.clear(); }
+  count = names.size;
+  return count;
+}
+const pageFields = (p) => (state.fields[p.src] && state.fields[p.src].get(p.idx)) || [];
+const fieldVal = (p, f) => (state.forms[p.src] || {})[f.name];
+const fieldKey = (p) => pageFields(p).map(f => fieldVal(p, f));
+function fieldSize(f, h) {
+  const auto = f.multi ? 10 : Math.max(6, Math.min(12, h * 0.62));
+  return f.size ? Math.min(f.size, f.multi ? 12 : Math.max(6, h * 0.62), 14) : auto;
+}
+/* Wrap text to a width (in points) for multi-line fields */
+function wrapText(text, size, fontKey, width) {
+  measureCtx.font = `${fontWeight(fontKey, false)} ${size}px ${fontStack(fontKey)}`;
+  const out = [];
+  for (const para of String(text).split('\n')) {
+    let line = '';
+    for (const word of para.split(' ')) {
+      const tryLine = line ? line + ' ' + word : word;
+      if (line && measureCtx.measureText(tryLine).width > width) { out.push(line); line = word; } else line = tryLine;
+    }
+    out.push(line);
+  }
+  return out.join('\n');
+}
+const markCache = new Map();
+function markImage(kind, w, h) {
+  const key = kind + w.toFixed(1) + 'x' + h.toFixed(1);
+  if (markCache.has(key)) return markCache.get(key);
+  const K = 6, c = document.createElement('canvas');
+  c.width = Math.max(2, Math.round(w * K)); c.height = Math.max(2, Math.round(h * K));
+  const x = c.getContext('2d'); x.scale(K, K);
+  const m = Math.min(w, h);
+  x.fillStyle = x.strokeStyle = '#111827';
+  if (kind === 'radio') { x.beginPath(); x.arc(w / 2, h / 2, m * 0.28, 0, Math.PI * 2); x.fill(); }
+  else { x.lineWidth = Math.max(1, m * 0.13); x.lineCap = 'round'; x.lineJoin = 'round'; x.beginPath();
+    x.moveTo(w / 2 - m * 0.3, h / 2); x.lineTo(w / 2 - m * 0.08, h / 2 + m * 0.24); x.lineTo(w / 2 + m * 0.32, h / 2 - m * 0.26); x.stroke(); }
+  const out = { canvas: c, w, h, key: 'mk-' + key };
+  markCache.set(key, out);
+  return out;
+}
+/* The filled-in values, drawn on the page (and written as real text in the PDF) */
+function fieldStamps(p, vp, R) {
+  const out = [];
+  for (const f of pageFields(p)) {
+    const v = fieldVal(p, f);
+    const [x1, y1, x2, y2] = [Math.min(f.rect[0], f.rect[2]), Math.min(f.rect[1], f.rect[3]), Math.max(f.rect[0], f.rect[2]), Math.max(f.rect[1], f.rect[3])];
+    const w = x2 - x1, h = y2 - y1;
+    if (f.type === 'check' || f.type === 'radio') {
+      const on = f.type === 'check' ? !!v : (v && v === f.on);
+      if (!on) continue;
+      const [cx, cy] = vp.convertToViewportPoint((x1 + x2) / 2, (y1 + y2) / 2);
+      out.push({ img: markImage(f.type, w, h), cx, cy, a: -R, op: 1 });
+      continue;
+    }
+    let text = f.type === 'choice' ? ((f.options.find(o => o.v === v) || {}).t ?? v) : v;
+    if (!text || !String(text).trim()) continue;
+    text = String(text);
+    const font = 'arimo';
+    let size = fieldSize(f, h);
+    if (f.multi) text = wrapText(text, size, font, w - 4);
+    else { let img = textImage(text, size, '#111827', false, font); while (img.w - img.padL - img.padR > w - 4 && size > 5) { size -= 0.5; img = textImage(text, size, '#111827', false, font); } }
+    const img = textImage(text, size, '#111827', false, font);
+    const rtl = isHebrew(text);
+    const align = f.align === 1 ? 'c' : f.align === 2 ? 'r' : (rtl ? 'r' : 'l');
+    const cxu = align === 'c' ? (x1 + x2) / 2 : align === 'r' ? x2 - 2 + img.padR - img.w / 2 : x1 + 2 - img.padL + img.w / 2;
+    const base = f.multi ? y2 - 2 - size * 0.95 : y1 + (h - size * 0.72) / 2;
+    const cyu = base + (img.asc - img.h / 2);
+    const [cx, cy] = vp.convertToViewportPoint(cxu, cyu);
+    out.push({ img, cx, cy, a: -R, op: 1, t: { text, size, color: '#111827', bold: false, font, fx: {} } });
+  }
+  return out;
+}
+function removeWidgets(doc, page) {
+  const { PDFName, PDFArray } = PDFLib;
+  const annots = page.node.lookup(PDFName.of('Annots'), PDFArray);
+  if (!annots) return;
+  const keep = annots.asArray().filter(ref => {
+    const d = doc.context.lookup(ref);
+    const sub = d && d.get && d.get(PDFName.of('Subtype'));
+    return !(sub && sub.toString() === '/Widget');
+  });
+  page.node.set(PDFName.of('Annots'), doc.context.obj(keep));
+}
+/* Editor: fields become real inputs on top of the page */
+let fieldTimer;
+function setField(p, f, v) {
+  (state.forms[p.src] || (state.forms[p.src] = {}))[f.name] = v;
+  clearTimeout(fieldTimer); fieldTimer = setTimeout(renderGrid, 400);
+}
+function drawFields(p) {
+  const fields = pageFields(p); if (!fields.length) return;
+  const stage = $('stage');
+  for (const f of fields) {
+    const v = toView({ x1: Math.min(f.rect[0], f.rect[2]), y1: Math.min(f.rect[1], f.rect[3]), x2: Math.max(f.rect[0], f.rect[2]), y2: Math.max(f.rect[1], f.rect[3]) });
+    let el;
+    const val = fieldVal(p, f);
+    if (f.type === 'check' || f.type === 'radio') {
+      el = document.createElement('button');
+      el.type = 'button'; el.className = 'ff ff-' + f.type;
+      const on = f.type === 'check' ? !!val : val === f.on;
+      el.setAttribute('aria-pressed', String(on)); el.setAttribute('aria-label', f.name);
+      el.textContent = on ? (f.type === 'check' ? '✓' : '●') : '';
+      el.onclick = () => {
+        if (f.ro) return;
+        if (f.type === 'check') setField(p, f, !fieldVal(p, f));
+        else setField(p, f, fieldVal(p, f) === f.on ? '' : f.on);
+        drawOverlays();
+      };
+    } else if (f.type === 'choice') {
+      el = document.createElement('select'); el.className = 'ff';
+      el.appendChild(new Option('', ''));
+      for (const o of f.options) el.appendChild(new Option(o.t, o.v));
+      el.value = val || '';
+      el.onchange = () => setField(p, f, el.value);
+    } else {
+      el = document.createElement(f.multi ? 'textarea' : 'input'); el.className = 'ff';
+      if (!f.multi) el.type = 'text';
+      el.value = val || ''; el.dir = 'auto';
+      if (f.maxLen) el.maxLength = f.maxLen;
+      el.addEventListener('input', () => setField(p, f, el.value));
+    }
+    el.title = f.name;
+    if (f.ro) { el.disabled = true; el.classList.add('ro'); }
+    Object.assign(el.style, { left: v.left + 'px', top: v.top + 'px', width: v.width + 'px', height: v.height + 'px',
+      fontSize: Math.max(8, fieldSize(f, v.height / ed.scale) * ed.scale) + 'px' });
+    stage.appendChild(el);
+  }
+}
+
 /* All stamps for a page, in display coordinates of viewport vp.
    Each: {img, cx, cy, a (visual degrees, counter-clockwise), op} */
 /* Pictures added to pages (signatures, photos, shapes, highlights). The picture data is kept apart
@@ -270,7 +433,7 @@ function ensureAssets(pages) {
   return Promise.all(list);
 }
 function stampList(p, pg, vp, n, total, set) {
-  const s = vp.scale, R = totalRot(pg, p), out = [];
+  const s = vp.scale, R = totalRot(pg, p), out = fieldStamps(p, vp, R);
   for (const o of p.objs || []) {
     const [cx, cy] = vp.convertToViewportPoint(o.cx, o.cy);
     out.push({ img: { canvas: assetImg(o.asset), w: o.w, h: o.h, key: o.asset, src: assets.get(o.asset) }, cx, cy, a: o.ang - R + (o.rot || 0), op: o.op ?? 1 });
@@ -349,6 +512,8 @@ async function addBytes(bytes, name) {
   state.sources.push({ name, bytes, pdf, cache: new Map(), key });
   persisted.add(key); store.put('files', key, bytes);
   for (let i = 0; i < pdf.numPages; i++) state.pages.push({ id: uid++, src, idx: i, rot: 0, overlays: [], rects: [], objs: [] });
+  const nFields = await loadFormFields(src);
+  if (nFields) setTimeout(() => toast(`נמצא טופס עם ${nFields} שדות. אפשר למלא אותם במסך העריכה.`, 4500), 400);
   if ($('fileName').dataset.auto !== 'no') {
     const merged = new Set(state.pages.map(p => p.src)).size > 1;
     if (!merged || !s0) $('fileName').value = name.replace(/\.pdf$/i, '') + (merged ? '-ממוזג' : '-ערוך') + '.pdf';
@@ -461,7 +626,7 @@ async function fillThumb(card, p, n, total, set, seq) {
   const pg = await getPage(p.src, p.idx);
   const R = totalRot(pg, p);
   const base = pg.getViewport({ scale: 1, rotation: R });
-  const key = JSON.stringify([R, p.overlays, p.rects || [], (p.objs || []).map(o => [o.asset, o.cx, o.cy, o.w, o.h, o.rot, o.op]), set.wm, set.pn.on ? [set.pn, n, total] : 0]);
+  const key = JSON.stringify([R, fieldKey(p), p.overlays, p.rects || [], (p.objs || []).map(o => [o.asset, o.cx, o.cy, o.w, o.h, o.rot, o.op]), set.wm, set.pn.on ? [set.pn, n, total] : 0]);
   await ensureAssets([p]);
   const cached = thumbCache.get(p.id);
   let canvas;
@@ -474,7 +639,7 @@ async function fillThumb(card, p, n, total, set, seq) {
     canvas.width = Math.ceil(vp.width); canvas.height = Math.ceil(vp.height);
     const ctx = canvas.getContext('2d');
     ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, canvas.width, canvas.height);
-    try { await pg.render({ canvasContext: ctx, viewport: vp }).promise; } catch (e) { console.warn(e); }
+    try { await pg.render({ canvasContext: ctx, viewport: vp, annotationMode: FORMS_OFF }).promise; } catch (e) { console.warn(e); }
     drawRects(ctx, p, vp);
     drawStamps(ctx, stampList(p, pg, vp, n, total, set), scale);
     thumbCache.set(p.id, { key, canvas });
@@ -854,7 +1019,7 @@ async function flatPage(out, p, pg) {
   c.width = Math.ceil(vp.width); c.height = Math.ceil(vp.height);
   const ctx = c.getContext('2d');
   ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height);
-  await pg.render({ canvasContext: ctx, viewport: vp }).promise;
+  await pg.render({ canvasContext: ctx, viewport: vp, annotationMode: FORMS_OFF }).promise;
   drawRects(ctx, p, vp);
   const img = await out.embedJpg(c.toDataURL('image/jpeg', 0.92));
   c.width = c.height = 0;
@@ -883,6 +1048,7 @@ async function buildPdf(pages) {
     else {
       [page] = await out.copyPages(srcDocs.get(p.src), [p.idx]);
       out.addPage(page);
+      if (pageFields(p).length) removeWidgets(out, page);
     }
     const R = totalRot(pg, p);
     page.setRotation(degrees(R));
@@ -1050,7 +1216,7 @@ async function renderBitmap() {
   canvas.width = Math.ceil(hi.width); canvas.height = Math.ceil(hi.height);
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
   ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, canvas.width, canvas.height);
-  try { await pg.render({ canvasContext: ctx, viewport: hi }).promise; } catch (e) { console.warn(e); return; }
+  try { await pg.render({ canvasContext: ctx, viewport: hi, annotationMode: FORMS_OFF }).promise; } catch (e) { console.warn(e); return; }
   if (tok !== ed.renderTok || pg !== ed.pg) return;
   canvas.style.width = ed.vp.width + 'px'; canvas.style.height = ed.vp.height + 'px';
   const old = $('stage').querySelector('canvas');
@@ -1141,7 +1307,7 @@ function positionOv(el, o) {
 }
 function drawOverlays() {
   const stage = $('stage'), p = edPage(); if (!p || !ed.vp) return;
-  stage.querySelectorAll('.ov, .er, .ti, .obj').forEach(el => el.remove());
+  stage.querySelectorAll('.ov, .er, .ti, .obj, .ff').forEach(el => el.remove());
   const rects = p.rects || [];
   for (const r of rects) {
     const v = toView(r);
@@ -1153,6 +1319,7 @@ function drawOverlays() {
     stage.appendChild(el);
   }
   drawObjects(p);
+  drawFields(p);
   if (ed.mode === 'edit' || ed.mode === 'mark') {
     const covers = (p.rects || []).filter(r => r.link);
     for (const u of getUnits()) {
@@ -1391,6 +1558,7 @@ function startTap(e, kind, extra) {
 }
 $('stage').addEventListener('pointerdown', (e) => {
   const p = edPage(); if (!p || !ed.vp) return;
+  if (e.target.closest('.ff')) return;            // typing in a form field
   if (e.button > 0) return;
   pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
   try { $('stage').setPointerCapture(e.pointerId); } catch (_) {}
@@ -2183,13 +2351,14 @@ function sessionData() {
     fileName: $('fileName').value, fileNameAuto: $('fileName').dataset.auto !== 'no',
     sources: state.sources.map((s, i) => used.has(i) ? { key: s.key, name: s.name } : null),
     pages: state.pages,
+    forms: state.forms,
     settings: Object.fromEntries(SETTING_IDS.map(id => [id, $(id).type === 'checkbox' ? $(id).checked : $(id).value])),
   };
 }
 async function autosave() {
   if (restoring) return;
   const data = sessionData();
-  const sig = JSON.stringify([data.fileName, data.sources, data.pages, data.settings]);
+  const sig = JSON.stringify([data.fileName, data.sources, data.pages, data.settings, data.forms]);
   if (sig === savedSig) return;
   savedSig = sig;
   saveState = 'saving'; showSaveState();
@@ -2243,6 +2412,9 @@ async function restoreSession(rec) {
     for (const p of rec.pages) for (const o of p.objs || []) {
       if (!assets.has(o.asset)) { const d = await store.get('assets', o.asset); if (d) { assets.set(o.asset, d); persisted.add(o.asset); } }
     }
+    state.forms = {};
+    for (let i = 0; i < state.sources.length; i++) if (state.sources[i]) await loadFormFields(i);
+    for (const [k, vals] of Object.entries(rec.forms || {})) state.forms[k] = Object.assign(state.forms[k] || {}, vals);
     state.pages = rec.pages.filter(p => state.sources[p.src]);
     let maxId = 0;
     const walk = (v) => { if (v && typeof v === 'object') { if (typeof v.id === 'number') maxId = Math.max(maxId, v.id); Object.values(v).forEach(walk); } };
