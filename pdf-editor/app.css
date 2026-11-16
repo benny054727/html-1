@@ -675,3 +675,4 @@ input[type=search] { width: 100%; border: 1px solid var(--line); background: var
 .stage .ff-check, .stage .ff-radio { display: grid; place-items: center; padding: 0; cursor: pointer; font-weight: 700; color: #111827; }
 .stage .ff-radio { border-radius: 50%; font-size: 70% !important; }
 .stage .ff.ro { opacity: .6; cursor: not-allowed; }
+.size-note { margin: 2px 0 0; font-size: 12.5px; }

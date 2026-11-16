@@ -16,7 +16,7 @@
 <meta name="apple-mobile-web-app-title" content="MY PDF">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <title>עורך MY PDF</title>
-<link rel="stylesheet" href="app.css?v=17">
+<link rel="stylesheet" href="app.css?v=18">
 </head>
 <body>
 
@@ -285,6 +285,15 @@
   <div class="sh-head"><h2 id="dlTitle">הורדת הקובץ</h2><button class="iconbtn" type="button" data-close aria-label="סגירה"><svg class="i"><use href="#i-x"/></svg></button></div>
   <div class="sh-body">
     <div class="field"><label for="fileName">שם הקובץ</label><input type="text" id="fileName" value="מסמך.pdf"></div>
+    <div class="field"><label for="dlSize">גודל הקובץ</label>
+      <select id="dlSize">
+        <option value="none">מקורי, בלי הקטנה</option>
+        <option value="light">הקטנה קלה (מומלץ)</option>
+        <option value="strong">הקטנה חזקה</option>
+        <option value="max">הקטנה מקסימלית (העמודים הופכים לתמונות)</option>
+      </select>
+      <p class="hint size-note" id="dlSizeNote"></p>
+    </div>
     <button class="btn primary large" type="button" id="dlAllBtn"><svg class="i"><use href="#i-download"/></svg><span id="dlAllLabel">הורדת המסמך</span></button>
     <button class="btn large" type="button" id="shareBtn" hidden><svg class="i"><use href="#i-share"/></svg><span>שיתוף (וואטסאפ, מייל…)</span></button>
     <label class="switch secure-row" id="dlSecureRow" hidden><input type="checkbox" id="dlSecure"><span><b>מחיקה מאובטחת</b> של כל טקסט שכוסה או הוחלף. עמודים עם כיסוי יישמרו כתמונה, כך שלא יישאר מתחתם שום מידע.</span></label>
@@ -366,6 +375,7 @@
     <button type="button" data-tool="pn"><svg class="i"><use href="#i-hash"/></svg><span>מספרי עמודים<small id="pnState">כבוי</small></span></button>
     <button type="button" data-tool="addpdf"><svg class="i"><use href="#i-plus"/></svg><span>הוספת קובץ PDF<small>מיזוג קובץ נוסף לסוף המסמך</small></span></button>
     <button type="button" data-tool="imgpages"><svg class="i"><use href="#i-photos"/></svg><span>תמונות לעמודים<small>צילומים מהטלפון הופכים לעמודים במסמך</small></span></button>
+    <button type="button" data-tool="shrink"><svg class="i"><use href="#i-download"/></svg><span>הקטנת קובץ<small>לשליחה במייל או בוואטסאפ</small></span></button>
     <button type="button" data-tool="select"><svg class="i"><use href="#i-select"/></svg><span>בחירת כמה עמודים<small>לסיבוב, שכפול, מחיקה או הורדה</small></span></button>
   </div>
 </dialog>
@@ -394,6 +404,6 @@
 
 <script src="vendor/pdf.min.js"></script>
 <script src="vendor/pdf-lib.min.js"></script>
-<script src="app.js?v=17"></script>
+<script src="app.js?v=18"></script>
 </body>
 </html>
