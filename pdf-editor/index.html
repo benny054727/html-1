@@ -16,7 +16,7 @@
 <meta name="apple-mobile-web-app-title" content="MY PDF">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <title>עורך MY PDF</title>
-<link rel="stylesheet" href="app.css?v=11">
+<link rel="stylesheet" href="app.css?v=12">
 </head>
 <body>
 
@@ -124,7 +124,11 @@
       <div class="ed-tools" id="edTextTools">
         <div class="ed-row">
           <textarea id="edText" rows="1" placeholder="כתבו טקסט ולחצו על העמוד" aria-label="טקסט"></textarea>
-          <button class="chip toggle" type="button" id="lineMode" aria-pressed="false" title="לחיצה על מילה בוחרת את כל השורה" hidden>שורה שלמה</button>
+          <div class="seg unit-seg" id="unitSeg" role="group" aria-label="מה הקשה בוחרת" hidden>
+            <button class="mode" type="button" data-unit="letter" aria-pressed="false">אות</button>
+            <button class="mode" type="button" data-unit="word" aria-pressed="true">מילה</button>
+            <button class="mode" type="button" data-unit="line" aria-pressed="false">שורה</button>
+          </div>
           <button class="iconbtn sm style-toggle" type="button" id="styleToggle" aria-expanded="false" title="עיצוב הטקסט"><span class="aa">Aa</span></button>
         </div>
       </div>
@@ -299,6 +303,6 @@
 
 <script src="vendor/pdf.min.js"></script>
 <script src="vendor/pdf-lib.min.js"></script>
-<script src="app.js?v=11"></script>
+<script src="app.js?v=12"></script>
 </body>
 </html>
