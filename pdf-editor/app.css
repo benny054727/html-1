@@ -638,3 +638,16 @@ input[type=search] { width: 100%; border: 1px solid var(--line); background: var
 .objbar .ob-colors button[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--accent); }
 .lw { display: block; width: 18px; background: currentColor; border-radius: 2px; }
 .lw.thin { height: 2px; } .lw.thick { height: 5px; }
+
+/* Resume card and save state */
+.resume {
+  width: 100%; max-width: 560px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; text-align: start;
+  background: var(--surface); border: 2px solid var(--accent); border-radius: 18px; padding: 14px 16px;
+  box-shadow: 0 6px 20px rgba(15, 118, 110, .14);
+}
+.resume-info { flex: 1 1 200px; display: flex; flex-direction: column; min-width: 0; }
+.resume-info b { font-size: 17px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.resume-info small { color: var(--muted); }
+.resume-actions { display: flex; gap: 8px; }
+.save-state { color: var(--accent); }
+.save-state.busy { color: var(--muted); }
