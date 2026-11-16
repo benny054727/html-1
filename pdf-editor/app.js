@@ -79,22 +79,36 @@ function paperName(wPt, hPt) {
 /* Text rendered to an image so that Hebrew (and any script) works in the output PDF */
 const textImgCache = new Map();
 const measureCtx = document.createElement('canvas').getContext('2d');
-function textImage(text, size, color, bold) {
-  const key = [text, size, color, bold].join('\u0001');
+/* Fonts bundled with the app. Each has Hebrew and Latin letters and digits.
+   Arimo and Tinos have the same letter widths as Arial and Times New Roman. */
+const FONTS = {
+  heebo:  { label: 'Heebo (מודרני)', family: 'Heebo' },
+  arimo:  { label: 'Arial (אריאל)', family: 'Arimo' },
+  tinos:  { label: 'Times New Roman', family: 'Tinos' },
+  david:  { label: 'David (דוד)', family: 'David Libre' },
+  frank:  { label: 'Frank Ruehl (פרנק רוהל)', family: 'Frank Ruhl Libre' },
+  miriam: { label: 'Miriam (מרים)', family: 'Miriam Libre' },
+};
+const fontStack = (k) => `"${(FONTS[k] || FONTS.heebo).family}", Heebo, Arial, sans-serif`;
+
+/* The text is drawn into an image with a known baseline (asc from the top), so it can sit exactly on a line */
+function textImage(text, size, color, bold, fontKey) {
+  const key = [text, size, color, bold, fontKey || 'heebo'].join('\u0001');
   if (textImgCache.has(key)) return textImgCache.get(key);
-  const font = `${bold ? 700 : 400} ${size}px ${UI_FONT}`;
+  const font = `${bold ? 700 : 400} ${size}px ${fontStack(fontKey)}`;
   measureCtx.font = font;
-  const w = Math.max(1, measureCtx.measureText(text).width) + size * 0.2;
-  const h = size * 1.35;
-  const K = Math.max(0.5, Math.min(5, 4000 / w, 4000 / h));
+  const pad = size * 0.1;
+  const w = Math.max(1, measureCtx.measureText(text).width) + pad * 2;
+  const asc = size * 1.0, h = size * 1.3;
+  const K = Math.max(0.5, Math.min(8, 4000 / w, 4000 / h));
   const c = document.createElement('canvas');
   c.width = Math.ceil(w * K); c.height = Math.ceil(h * K);
   const ctx = c.getContext('2d');
   ctx.scale(K, K);
-  ctx.font = font; ctx.fillStyle = color; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.font = font; ctx.fillStyle = color; ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
   ctx.direction = isHebrew(text) ? 'rtl' : 'ltr';
-  ctx.fillText(text, w / 2, h / 2);
-  const out = { canvas: c, w, h, key };
+  ctx.fillText(text, w / 2, asc);
+  const out = { canvas: c, w, h, asc, pad, key };
   textImgCache.set(key, out);
   if (textImgCache.size > 300) textImgCache.delete(textImgCache.keys().next().value);
   return out;
@@ -110,11 +124,12 @@ function pageNumberText(fmt, n, t) {
 /* Where an overlay's centre sits on the display. Replaced text is anchored at its start edge. */
 function overlayCenter(o, vp, R) {
   const [x, y] = vp.convertToViewportPoint(o.px, o.py);
-  if (!o.anchor || o.anchor === 'c') return [x, y];
-  const img = textImage(o.text || ' ', o.size, o.color, o.bold);
-  const a = (o.ang - R) * Math.PI / 180;
-  const half = (img.w / 2 - o.size * 0.1) * vp.scale * (o.anchor === 'l' ? 1 : -1);
-  return [x + half * Math.cos(a), y - half * Math.sin(a)];
+  const img = textImage(o.text || ' ', o.size, o.color, o.bold, o.font);
+  const a = (o.ang - R) * Math.PI / 180, s = vp.scale;
+  // horizontal: the point is the start/end edge of the letters; vertical: the point is on the baseline
+  const hx = (o.anchor === 'l' || o.anchor === 'r') ? (img.w / 2 - img.pad) * (o.anchor === 'l' ? 1 : -1) * s : 0;
+  const vy = o.vb === 'base' ? (img.h / 2 - img.asc) * s : 0;
+  return [x + hx * Math.cos(a) + vy * Math.sin(a), y - hx * Math.sin(a) + vy * Math.cos(a)];
 }
 /* Areas covered with a solid colour (erased) */
 function drawRects(ctx, p, vp) {
@@ -133,7 +148,7 @@ function stampList(p, pg, vp, n, total, set) {
   for (const o of p.overlays) {
     if (!o.text.trim()) continue;
     const [cx, cy] = overlayCenter(o, vp, R);
-    out.push({ img: textImage(o.text, o.size, o.color, o.bold), cx, cy, a: o.ang - R, op: 1 });
+    out.push({ img: textImage(o.text, o.size, o.color, o.bold, o.font), cx, cy, a: o.ang - R, op: 1 });
   }
   if (set.wm.on && set.wm.text.trim()) {
     out.push({ img: textImage(set.wm.text, set.wm.size, set.wm.color, true), cx: vp.width / 2, cy: vp.height / 2, a: set.wm.angle, op: set.wm.opacity });
@@ -546,6 +561,7 @@ async function drawEditor() {
   let items = [];
   try {
     const tc = await pg.getTextContent();
+    ed.styles = tc.styles || {};
     items = tc.items.map((it, i) => ({ ...it, i })).filter(it =>
       it.str && it.str.trim() && Math.abs(it.transform[1]) < 0.01 && Math.abs(it.transform[2]) < 0.01 && it.transform[0] > 0 && it.width > 0);
   } catch (e) { console.warn(e); }
@@ -702,13 +718,14 @@ function drawOverlays() {
     const el = document.createElement('div');
     el.className = 'ov' + (o.id === ed.selId ? ' sel' : '');
     el.dataset.id = o.id;
-    el.dir = isHebrew(o.text) ? 'rtl' : 'ltr';
     positionOv(el, o);
     el.style.transform = `translate(-50%, -50%) rotate(${-(o.ang - ed.R)}deg)`;
-    el.style.fontSize = (o.size * ed.scale) + 'px';
-    el.style.fontWeight = o.bold ? 700 : 400;
-    el.style.color = o.color;
-    el.textContent = o.text || ' ';
+    const img = textImage(o.text || ' ', o.size, o.color, o.bold, o.font);
+    const cv = document.createElement('canvas');
+    cv.width = img.canvas.width; cv.height = img.canvas.height;
+    cv.getContext('2d').drawImage(img.canvas, 0, 0);
+    cv.style.width = img.w * ed.scale + 'px'; cv.style.height = img.h * ed.scale + 'px';
+    el.appendChild(cv);
     if (!o.text) el.classList.add('empty');
     el.appendChild(xButton(o.srcItem != null ? 'החזרת הטקסט המקורי' : 'מחיקת הטקסט'));
     stage.appendChild(el);
@@ -729,6 +746,7 @@ function stagePoint(e) {
 }
 function loadFields(o) {
   $('edText').value = o.text; $('edSize').value = Math.round(o.size * 10) / 10; $('edColor').value = o.color; $('edBold').checked = o.bold;
+  $('edFont').value = o.font || 'heebo';
 }
 function removeOverlay(p, id) {
   const o = p.overlays.find(x => x.id === id);
@@ -736,6 +754,21 @@ function removeOverlay(p, id) {
   if (o && o.rectId) p.rects = (p.rects || []).filter(r => r.id !== o.rectId);
 }
 
+/* Which bundled font looks most like the font this text was written in */
+function guessFont(it) {
+  let name = '', fobj = null;
+  try { if (ed.pg.commonObjs.has(it.fontName)) fobj = ed.pg.commonObjs.get(it.fontName); } catch (_) {}
+  name = (fobj && (fobj.name || '')) + ' ' + ((ed.styles[it.fontName] || {}).fontFamily || '');
+  const n = name.toLowerCase().replace(/^[a-z]{6}\+/, '');
+  const bold = !!(fobj && (fobj.bold || fobj.black)) || /bold|black|heavy|demi/.test(n);
+  let font = 'arimo';
+  if (/david/.test(n)) font = 'david';
+  else if (/frank|ruehl|ruhl/.test(n)) font = 'frank';
+  else if (/miriam/.test(n)) font = 'miriam';
+  else if (/times|tinos|roman|narkis|georgia|garamond|cambria|serif(?!.*sans)/.test(n) && !/sans/.test(n)) font = 'tinos';
+  else if (/heebo|rubik|assistant|open ?sans|segoe|calibri/.test(n)) font = 'heebo';
+  return { font, bold };
+}
 function replaceItem(p, it) {
   snapshot();
   const box = itemBox(it);
@@ -743,11 +776,13 @@ function replaceItem(p, it) {
   const rect = { id: uid++, x1: box.x1, y1: box.y1, x2: box.x2, y2: box.y2, color: sampleBg(v), link: true };
   p.rects = p.rects || [];
   p.rects.push(rect);
-  const rtl = isHebrew(it.str) || it.dir === 'rtl';
-  const midY = it.transform[5] + box.h * 0.33;
+  // In a Hebrew line, a changed word or number keeps its right edge (the side the line starts from)
+  const rtl = isHebrew(it.str) || ed.items.some(x => Math.abs(x.transform[5] - it.transform[5]) < box.h * 0.3 && isHebrew(x.str));
+  const g = guessFont(it);
   const o = {
-    id: uid++, text: it.str, size: Math.round(box.h * 10) / 10, color: textColorInside(v), bold: /bold|black|heavy/i.test(it.fontName || ''),
-    px: rtl ? it.transform[4] + it.width : it.transform[4], py: midY, ang: 0, anchor: rtl ? 'r' : 'l',
+    id: uid++, text: it.str, size: Math.round(box.h * 10) / 10, color: textColorInside(v), bold: g.bold, font: g.font,
+    // anchored at the start edge of the original words, on the original baseline
+    px: rtl ? it.transform[4] + it.width : it.transform[4], py: it.transform[5], vb: 'base', ang: 0, anchor: rtl ? 'r' : 'l',
     srcItem: it.i, rectId: rect.id,
   };
   p.overlays.push(o);
@@ -756,6 +791,31 @@ function replaceItem(p, it) {
   drawOverlays();
   $('edText').focus(); $('edText').select();
 }
+/* Keep text on a line: replaced text stays on its own baseline, other text snaps to nearby lines */
+function snapToLine(o) {
+  hideGuide();
+  if (!$('edLock').checked || ((o.ang % 360) + 360) % 360 !== 0 || o.vb !== 'base') return;
+  let y = null;
+  if (o.srcItem != null) {
+    const it = ed.items.find(x => x.i === o.srcItem);
+    if (it) y = it.transform[5];
+  } else {
+    let bd = 7 / ed.scale;
+    for (const it of ed.items) { const d = Math.abs(it.transform[5] - o.py); if (d < bd) { bd = d; y = it.transform[5]; } }
+  }
+  if (y == null) return;
+  o.py = y;
+  showGuide(o);
+}
+function showGuide(o) {
+  let g = $('stage').querySelector('.guide');
+  if (!g) { g = document.createElement('div'); g.className = 'guide'; $('stage').appendChild(g); }
+  const [x, y] = ed.vp.convertToViewportPoint(o.px, o.py);
+  const vertical = ed.R % 180 !== 0;
+  g.classList.toggle('v', vertical);
+  g.style.left = vertical ? x + 'px' : '0'; g.style.top = vertical ? '0' : y + 'px';
+}
+function hideGuide() { $('stage').querySelector('.guide')?.remove(); }
 
 const pointers = new Map();
 function cancelGestures() {
@@ -848,6 +908,7 @@ $('stage').addEventListener('pointermove', (e) => {
   if (!ed.drag.moved) { snapshot(); ed.drag.moved = true; }
   const [mx, my] = stagePoint(e);
   [ed.drag.o.px, ed.drag.o.py] = ed.vp.convertToPdfPoint(mx - ed.drag.dx, my - ed.drag.dy);
+  snapToLine(ed.drag.o);
   const el = $('stage').querySelector(`.ov[data-id="${ed.drag.o.id}"]`);
   if (el) positionOv(el, ed.drag.o);
 });
@@ -864,13 +925,18 @@ function doTap(t, e) {
   snapshot();
   const [x, y] = stagePoint(e);
   const [px, py] = ed.vp.convertToPdfPoint(x, y);
-  const o = { id: uid++, text, size: +$('edSize').value || 18, color: $('edColor').value, bold: $('edBold').checked, px, py, ang: ed.R };
+  const o = { id: uid++, text, size: +$('edSize').value || 18, color: $('edColor').value, bold: $('edBold').checked, font: $('edFont').value, px, py, ang: ed.R, vb: 'base' };
+  // the tap marks the middle of the text; move the anchor down to its baseline
+  const img = textImage(text, o.size, o.color, o.bold, o.font), d = img.asc - img.h / 2, th = o.ang * Math.PI / 180;
+  o.px += d * Math.sin(th); o.py -= d * Math.cos(th);
+  snapToLine(o); hideGuide();
   p.overlays.push(o);
   ed.selId = o.id;
   drawOverlays();
 }
 function endPointer(e) {
   pointers.delete(e.pointerId);
+  hideGuide();
   if (ed.pinch) { if (pointers.size < 2) ed.pinch = null; return; }
   if (ed.tap) {
     const t = ed.tap; ed.tap = null;
@@ -899,12 +965,12 @@ $('stage').addEventListener('pointerup', endPointer);
 $('stage').addEventListener('pointercancel', endPointer);
 
 let edSnapTaken = false;
-['edText', 'edSize', 'edColor', 'edBold'].forEach(id => {
+['edText', 'edSize', 'edColor', 'edBold', 'edFont'].forEach(id => {
   $(id).addEventListener('focus', () => { edSnapTaken = false; });
   $(id).addEventListener('input', () => {
     const o = edSel(); if (!o) return;
     if (!edSnapTaken) { snapshot(); edSnapTaken = true; }
-    o.text = $('edText').value; o.size = +$('edSize').value || o.size; o.color = $('edColor').value; o.bold = $('edBold').checked;
+    o.text = $('edText').value; o.size = +$('edSize').value || o.size; o.color = $('edColor').value; o.bold = $('edBold').checked; o.font = $('edFont').value;
     drawOverlays();
   });
 });
@@ -924,11 +990,13 @@ $('edPrev').onclick = () => { const n = idxOf(ed.pid); if (n > 0) openEditor(sta
 $('edNext').onclick = () => { const n = idxOf(ed.pid); if (n < state.pages.length - 1) openEditor(state.pages[n + 1].id); };
 window.addEventListener('resize', () => { if ($('editor').open && ed.pg) { clearTimeout(ed.rt); ed.rt = setTimeout(() => { computeFit(); layoutEditor(); scheduleRender(); }, 200); } });
 
-/* Make sure the Hebrew font is ready before drawing text into canvases */
+$('edFont').innerHTML = Object.entries(FONTS).map(([k, f]) => `<option value="${k}">${f.label}</option>`).join('');
+/* Make sure every font (Hebrew, Latin and digits) is ready before text is drawn into images */
 if (document.fonts && document.fonts.load) {
-  Promise.all([document.fonts.load(`400 20px Heebo`), document.fonts.load(`700 20px Heebo`)])
-    .then(() => { textImgCache.clear(); thumbCache.clear(); if (state.pages.length) renderGrid(); })
-    .catch(() => {});
+  const loads = [];
+  for (const f of Object.values(FONTS)) for (const w of [400, 700]) loads.push(document.fonts.load(`${w} 20px "${f.family}"`, 'אבג abc 123'));
+  Promise.allSettled(loads)
+    .then(() => { textImgCache.clear(); thumbCache.clear(); if (state.pages.length) renderGrid(); if ($('editor').open) drawOverlays(); });
 }
 onSettings();
 renderGrid();
