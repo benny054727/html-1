@@ -511,7 +511,7 @@ $('extractBtn').onclick = () => {
 };
 
 /* ---------- Page editor: new text, edit existing text, erase area ---------- */
-const ed = { pid: null, selId: null, selRect: null, vp: null, R: 0, scale: 1, dpr: 1, canvas: null, drag: null, draw: null, mode: 'text', items: [] };
+const ed = { pid: null, selId: null, selRect: null, vp: null, pg: null, base: null, R: 0, scale: 1, fit: 1, zoom: 1, renderTok: 0, canvas: null, drag: null, draw: null, tap: null, pinch: null, mode: 'text', items: [] };
 const edPage = () => state.pages.find(p => p.id === ed.pid);
 const edSel = () => edPage()?.overlays.find(o => o.id === ed.selId);
 const HINTS = {
@@ -521,7 +521,7 @@ const HINTS = {
 };
 
 async function openEditor(id) {
-  ed.pid = id; ed.selId = null; ed.selRect = null;
+  ed.pid = id; ed.selId = null; ed.selRect = null; cancelGestures(); ed.pinch = null; pointers.clear();
   if (!$('editor').open) $('editor').showModal();
   await drawEditor();
 }
@@ -539,19 +539,6 @@ async function drawEditor() {
   $('edPrev').disabled = n <= 0; $('edNext').disabled = n >= state.pages.length - 1;
   const pg = await getPage(p.src, p.idx);
   const R = totalRot(pg, p);
-  const base = pg.getViewport({ scale: 1, rotation: R });
-  const availW = Math.min(900, window.innerWidth - 80);
-  const availH = Math.max(320, window.innerHeight - 300);
-  const scale = Math.min(availW / base.width, availH / base.height, 2.5);
-  const vp = pg.getViewport({ scale, rotation: R });
-  const dpr = Math.min(2, window.devicePixelRatio || 1);
-  const hi = pg.getViewport({ scale: scale * dpr, rotation: R });
-  const canvas = document.createElement('canvas');
-  canvas.width = Math.ceil(hi.width); canvas.height = Math.ceil(hi.height);
-  canvas.style.width = vp.width + 'px'; canvas.style.height = vp.height + 'px';
-  const ctx = canvas.getContext('2d', { willReadFrequently: true });
-  ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, canvas.width, canvas.height);
-  await pg.render({ canvasContext: ctx, viewport: hi }).promise;
   // The page's own text, so it can be clicked and replaced
   let items = [];
   try {
@@ -560,12 +547,83 @@ async function drawEditor() {
       it.str && it.str.trim() && Math.abs(it.transform[1]) < 0.01 && Math.abs(it.transform[2]) < 0.01 && it.transform[0] > 0 && it.width > 0);
   } catch (e) { console.warn(e); }
   if (ed.pid !== p.id) return;
-  Object.assign(ed, { vp, R, scale, dpr, canvas, items });
+  const pageChanged = ed.pg !== pg || ed.R !== R;
+  Object.assign(ed, { pg, R, items, base: pg.getViewport({ scale: 1, rotation: R }) });
+  computeFit();
+  if (pageChanged) { $('stage').querySelector('canvas')?.remove(); ed.canvas = null; }
+  layoutEditor();
+  await renderBitmap();
+}
+function computeFit() {
+  const body = $('edBody');
+  const availW = Math.max(200, Math.min(900, (body.clientWidth || window.innerWidth) - 32));
+  const availH = Math.max(280, (body.clientHeight || window.innerHeight - 300) - 32);
+  ed.fit = Math.min(availW / ed.base.width, availH / ed.base.height, 2.5);
+}
+/* Size the page for the current zoom; the old bitmap is stretched until the sharp one is ready */
+function layoutEditor() {
+  const scale = ed.fit * ed.zoom;
+  ed.vp = ed.pg.getViewport({ scale, rotation: ed.R });
+  ed.scale = scale;
   const stage = $('stage');
-  stage.style.width = vp.width + 'px'; stage.style.height = vp.height + 'px';
-  stage.replaceChildren(canvas);
+  stage.style.width = ed.vp.width + 'px'; stage.style.height = ed.vp.height + 'px';
+  const c = stage.querySelector('canvas');
+  if (c) { c.style.width = ed.vp.width + 'px'; c.style.height = ed.vp.height + 'px'; }
+  $('zoomLabel').textContent = Math.round(ed.zoom * 100) + '%';
+  $('zoomOut').disabled = ed.zoom <= ZOOM_MIN + 1e-6;
+  $('zoomIn').disabled = ed.zoom >= ZOOM_MAX - 1e-6;
   drawOverlays();
 }
+async function renderBitmap() {
+  const tok = ++ed.renderTok;
+  const vp = ed.vp, pg = ed.pg;
+  // Sharp on high-density screens, but never a canvas bigger than phones allow
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const k = Math.min(dpr, Math.sqrt(14e6 / (vp.width * vp.height)));
+  const hi = pg.getViewport({ scale: ed.scale * k, rotation: ed.R });
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.ceil(hi.width); canvas.height = Math.ceil(hi.height);
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+  try { await pg.render({ canvasContext: ctx, viewport: hi }).promise; } catch (e) { console.warn(e); return; }
+  if (tok !== ed.renderTok || pg !== ed.pg) return;
+  canvas.style.width = ed.vp.width + 'px'; canvas.style.height = ed.vp.height + 'px';
+  const old = $('stage').querySelector('canvas');
+  if (old) old.replaceWith(canvas); else $('stage').prepend(canvas);
+  ed.canvas = canvas;
+}
+let renderTimer;
+function scheduleRender() { clearTimeout(renderTimer); renderTimer = setTimeout(renderBitmap, 180); }
+
+/* ---- Zoom ---- */
+const ZOOM_MIN = 0.5, ZOOM_MAX = 6;
+const clampZoom = (z) => Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, z));
+/* Zoom so that the point at fraction (fx, fy) of the page ends up under screen point (cx, cy) */
+function zoomAt(z, fx, fy, cx, cy) {
+  if (!ed.pg) return;
+  ed.zoom = clampZoom(z);
+  layoutEditor();
+  const body = $('edBody'), r = $('stage').getBoundingClientRect();
+  body.scrollLeft += (r.left + fx * r.width) - cx;
+  body.scrollTop += (r.top + fy * r.height) - cy;
+  scheduleRender();
+}
+function zoomAround(z, cx, cy) {
+  const br = $('edBody').getBoundingClientRect();
+  if (cx == null) { cx = br.left + br.width / 2; cy = br.top + br.height / 2; }
+  const r = $('stage').getBoundingClientRect();
+  const fx = Math.max(0, Math.min(1, (cx - r.left) / r.width)), fy = Math.max(0, Math.min(1, (cy - r.top) / r.height));
+  zoomAt(z, fx, fy, cx, cy);
+}
+const ZOOM_STEPS = [0.5, 0.75, 1, 1.25, 1.5, 2, 2.5, 3, 4, 5, 6];
+$('zoomIn').onclick = () => zoomAround(ZOOM_STEPS.find(z => z > ed.zoom + 0.01) ?? ZOOM_MAX);
+$('zoomOut').onclick = () => zoomAround([...ZOOM_STEPS].reverse().find(z => z < ed.zoom - 0.01) ?? ZOOM_MIN);
+$('zoomFit').onclick = () => { ed.zoom = 1; layoutEditor(); scheduleRender(); };
+$('edBody').addEventListener('wheel', (e) => {
+  if (!e.ctrlKey && !e.metaKey) return;   // trackpad pinch also arrives as ctrl+wheel
+  e.preventDefault();
+  zoomAround(ed.zoom * Math.exp(-e.deltaY * 0.0025), e.clientX, e.clientY);
+}, { passive: false });
 
 /* Bounding box of a text item, in PDF user space */
 function itemBox(it) {
@@ -579,8 +637,9 @@ function toView(r) {
 }
 /* Background colour next to an area of the rendered page (the lightest of the points around it) */
 function sampleBg(v) {
+  if (!ed.canvas) return '#ffffff';
   const ctx = ed.canvas.getContext('2d', { willReadFrequently: true });
-  const k = ed.dpr, pts = [];
+  const k = ed.canvas.width / ed.vp.width, pts = [];
   const xs = [v.left - 3, v.left + v.width / 2, v.left + v.width + 3], ys = [v.top - 3, v.top + v.height / 2, v.top + v.height + 3];
   for (const x of xs) for (const y of ys) {
     if (x === xs[1] && y === ys[1]) continue;
@@ -594,9 +653,10 @@ function sampleBg(v) {
   return '#' + [c[0], c[1], c[2]].map(n => n.toString(16).padStart(2, '0')).join('');
 }
 function textColorInside(v) {
+  if (!ed.canvas) return '#000000';
   // darkest pixel inside the box = the original ink colour
   const ctx = ed.canvas.getContext('2d', { willReadFrequently: true });
-  const k = ed.dpr;
+  const k = ed.canvas.width / ed.vp.width;
   const x = Math.max(0, Math.round(v.left * k)), y = Math.max(0, Math.round(v.top * k));
   const w = Math.max(1, Math.min(ed.canvas.width - x, Math.round(v.width * k))), h = Math.max(1, Math.min(ed.canvas.height - y, Math.round(v.height * k)));
   const d = ctx.getImageData(x, y, w, h).data;
@@ -692,8 +752,29 @@ function replaceItem(p, it) {
   $('edText').focus(); $('edText').select();
 }
 
+const pointers = new Map();
+function cancelGestures() {
+  if (ed.draw) { ed.draw.el.remove(); ed.draw = null; }
+  ed.drag = null; ed.tap = null;
+}
+function startPinch() {
+  cancelGestures();
+  const [a, b] = [...pointers.values()];
+  const cx = (a.x + b.x) / 2, cy = (a.y + b.y) / 2;
+  const r = $('stage').getBoundingClientRect();
+  ed.pinch = { d0: Math.hypot(a.x - b.x, a.y - b.y) || 1, z0: ed.zoom, fx: (cx - r.left) / r.width, fy: (cy - r.top) / r.height };
+}
+function startTap(e, kind, extra) {
+  const body = $('edBody');
+  ed.tap = { kind, x0: e.clientX, y0: e.clientY, sl: body.scrollLeft, st: body.scrollTop, pan: false, ...extra };
+}
 $('stage').addEventListener('pointerdown', (e) => {
   const p = edPage(); if (!p || !ed.vp) return;
+  if (e.button > 0) return;
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  try { $('stage').setPointerCapture(e.pointerId); } catch (_) {}
+  if (pointers.size === 2) { startPinch(); return; }
+  if (pointers.size > 2) return;
   const xb = e.target.closest('.x');
   if (xb) {
     snapshot();
@@ -710,7 +791,6 @@ $('stage').addEventListener('pointerdown', (e) => {
     const [x, y] = ed.vp.convertToViewportPoint(o.px, o.py);
     const [mx, my] = stagePoint(e);
     ed.drag = { o, dx: mx - x, dy: my - y, moved: false };
-    $('stage').setPointerCapture(e.pointerId);
     drawOverlays();
     return;
   }
@@ -720,33 +800,38 @@ $('stage').addEventListener('pointerdown', (e) => {
     if (r && !r.link) { ed.selRect = r.id; ed.selId = null; drawOverlays(); return; }
   }
   const tiEl = e.target.closest('.ti');
-  if (tiEl && ed.mode === 'edit') {
-    const it = ed.items.find(x => x.i === +tiEl.dataset.i);
-    if (it) replaceItem(p, it);
-    return;
+  if (tiEl && ed.mode === 'edit') { startTap(e, 'ti', { i: +tiEl.dataset.i }); return; }
+  if (ed.selId || ed.selRect) {
+    ed.selId = null; ed.selRect = null; drawOverlays();
+    if (ed.mode !== 'erase') { startTap(e, 'none'); return; }
   }
-  if (ed.selId || ed.selRect) { ed.selId = null; ed.selRect = null; drawOverlays(); if (ed.mode !== 'erase') return; }
   if (ed.mode === 'erase') {
     const [x, y] = stagePoint(e);
     const el = document.createElement('div');
     el.className = 'er drawing';
     $('stage').appendChild(el);
     ed.draw = { x0: x, y0: y, el, x, y };
-    $('stage').setPointerCapture(e.pointerId);
     return;
   }
-  if (ed.mode === 'edit') return;
-  const text = $('edText').value;
-  if (!text.trim()) { toast('כתבו קודם טקסט בשדה למעלה'); $('edText').focus(); return; }
-  snapshot();
-  const [x, y] = stagePoint(e);
-  const [px, py] = ed.vp.convertToPdfPoint(x, y);
-  const o = { id: uid++, text, size: +$('edSize').value || 18, color: $('edColor').value, bold: $('edBold').checked, px, py, ang: ed.R };
-  p.overlays.push(o);
-  ed.selId = o.id;
-  drawOverlays();
+  // Text and edit modes: a tap acts, a drag scrolls the page
+  startTap(e, ed.mode === 'text' ? 'add' : 'none');
 });
 $('stage').addEventListener('pointermove', (e) => {
+  if (!pointers.has(e.pointerId)) return;
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (ed.pinch) {
+    if (pointers.size < 2) return;
+    const [a, b] = [...pointers.values()];
+    const d = Math.hypot(a.x - b.x, a.y - b.y) || 1;
+    zoomAt(ed.pinch.z0 * d / ed.pinch.d0, ed.pinch.fx, ed.pinch.fy, (a.x + b.x) / 2, (a.y + b.y) / 2);
+    return;
+  }
+  if (ed.tap) {
+    const t = ed.tap, dx = e.clientX - t.x0, dy = e.clientY - t.y0;
+    if (!t.pan && Math.hypot(dx, dy) > 8) t.pan = true;
+    if (t.pan) { const body = $('edBody'); body.scrollLeft = t.sl - dx; body.scrollTop = t.st - dy; }
+    return;
+  }
   if (ed.draw) {
     const [x, y] = stagePoint(e);
     Object.assign(ed.draw, { x, y });
@@ -761,11 +846,37 @@ $('stage').addEventListener('pointermove', (e) => {
   const el = $('stage').querySelector(`.ov[data-id="${ed.drag.o.id}"]`);
   if (el) positionOv(el, ed.drag.o);
 });
-function endPointer() {
+function doTap(t, e) {
+  const p = edPage(); if (!p) return;
+  if (t.kind === 'ti') {
+    const it = ed.items.find(x => x.i === t.i);
+    if (it) replaceItem(p, it);
+    return;
+  }
+  if (t.kind !== 'add') return;
+  const text = $('edText').value;
+  if (!text.trim()) { toast('כתבו קודם טקסט בשדה למעלה'); $('edText').focus(); return; }
+  snapshot();
+  const [x, y] = stagePoint(e);
+  const [px, py] = ed.vp.convertToPdfPoint(x, y);
+  const o = { id: uid++, text, size: +$('edSize').value || 18, color: $('edColor').value, bold: $('edBold').checked, px, py, ang: ed.R };
+  p.overlays.push(o);
+  ed.selId = o.id;
+  drawOverlays();
+}
+function endPointer(e) {
+  pointers.delete(e.pointerId);
+  if (ed.pinch) { if (pointers.size < 2) ed.pinch = null; return; }
+  if (ed.tap) {
+    const t = ed.tap; ed.tap = null;
+    if (!t.pan && e.type === 'pointerup') doTap(t, e);
+    return;
+  }
   ed.drag = null;
   const d = ed.draw; if (!d) return;
   ed.draw = null;
   d.el.remove();
+  if (e.type !== 'pointerup') return;
   const w = Math.abs(d.x - d.x0), h = Math.abs(d.y - d.y0);
   if (w < 4 || h < 4) return;
   const p = edPage();
@@ -806,7 +917,7 @@ $('edClose').onclick = () => $('editor').close();
 $('editor').addEventListener('close', () => { ed.pid = null; renderGrid(); });
 $('edPrev').onclick = () => { const n = idxOf(ed.pid); if (n > 0) openEditor(state.pages[n - 1].id); };
 $('edNext').onclick = () => { const n = idxOf(ed.pid); if (n < state.pages.length - 1) openEditor(state.pages[n + 1].id); };
-window.addEventListener('resize', () => { if ($('editor').open) { clearTimeout(ed.rt); ed.rt = setTimeout(drawEditor, 200); } });
+window.addEventListener('resize', () => { if ($('editor').open && ed.pg) { clearTimeout(ed.rt); ed.rt = setTimeout(() => { computeFit(); layoutEditor(); scheduleRender(); }, 200); } });
 
 /* Make sure the Hebrew font is ready before drawing text into canvases */
 if (document.fonts && document.fonts.load) {
