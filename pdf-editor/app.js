@@ -254,8 +254,26 @@ const hexRgb = (hex) => { const n = parseInt(hex.slice(1), 16); return rgb((n >>
 
 /* All stamps for a page, in display coordinates of viewport vp.
    Each: {img, cx, cy, a (visual degrees, counter-clockwise), op} */
+/* Pictures added to pages (signatures, photos, shapes, highlights). The picture data is kept apart
+   from the pages so undo steps stay small. */
+const assets = new Map();          // key -> data URL
+const assetImgs = new Map();       // key -> decoded <img>
+function addAsset(dataUrl) { const k = 'a' + (uid++); assets.set(k, dataUrl); return k; }
+function assetImg(k) {
+  if (!assetImgs.has(k)) { const im = new Image(); im.src = assets.get(k) || ''; assetImgs.set(k, im); }
+  return assetImgs.get(k);
+}
+function ensureAssets(pages) {
+  const list = [];
+  for (const p of pages) for (const o of p.objs || []) { const im = assetImg(o.asset); if (!im.complete) list.push(im.decode().catch(() => {})); }
+  return Promise.all(list);
+}
 function stampList(p, pg, vp, n, total, set) {
   const s = vp.scale, R = totalRot(pg, p), out = [];
+  for (const o of p.objs || []) {
+    const [cx, cy] = vp.convertToViewportPoint(o.cx, o.cy);
+    out.push({ img: { canvas: assetImg(o.asset), w: o.w, h: o.h, key: o.asset, src: assets.get(o.asset) }, cx, cy, a: o.ang - R + (o.rot || 0), op: o.op ?? 1 });
+  }
   for (const o of p.overlays) {
     if (!o.text.trim()) continue;
     const [cx, cy] = overlayCenter(o, vp, R);
@@ -281,6 +299,7 @@ function drawStamps(ctx, list, s) {
     ctx.globalAlpha = st.op;
     ctx.translate(st.cx, st.cy);
     ctx.rotate(-st.a * Math.PI / 180);
+    if (st.img.canvas instanceof HTMLImageElement && !st.img.canvas.complete) { ctx.restore(); continue; }
     ctx.drawImage(st.img.canvas, -st.img.w * s / 2, -st.img.h * s / 2, st.img.w * s, st.img.h * s);
     ctx.restore();
   }
@@ -321,7 +340,7 @@ async function addBytes(bytes, name) {
   }).promise;
   const src = state.sources.length;
   state.sources.push({ name, bytes, pdf, cache: new Map() });
-  for (let i = 0; i < pdf.numPages; i++) state.pages.push({ id: uid++, src, idx: i, rot: 0, overlays: [], rects: [] });
+  for (let i = 0; i < pdf.numPages; i++) state.pages.push({ id: uid++, src, idx: i, rot: 0, overlays: [], rects: [], objs: [] });
   if ($('fileName').dataset.auto !== 'no') {
     const merged = new Set(state.pages.map(p => p.src)).size > 1;
     if (!merged || !s0) $('fileName').value = name.replace(/\.pdf$/i, '') + (merged ? '-ממוזג' : '-ערוך') + '.pdf';
@@ -393,7 +412,7 @@ function renderGrid() {
   $('selCount').textContent = `${state.selected.size} נבחרו`;
   document.querySelectorAll('[data-needsel]').forEach(b => b.disabled = !state.selected.size);
   const s0 = settings();
-  $('wmDot').hidden = !s0.wm.on; $('pnDot').hidden = !s0.pn.on;
+  $('toolsDot').hidden = !(s0.wm.on || s0.pn.on);
 
   const grid = $('grid');
   const set = s0;
@@ -433,7 +452,8 @@ async function fillThumb(card, p, n, total, set, seq) {
   const pg = await getPage(p.src, p.idx);
   const R = totalRot(pg, p);
   const base = pg.getViewport({ scale: 1, rotation: R });
-  const key = JSON.stringify([R, p.overlays, p.rects || [], set.wm, set.pn.on ? [set.pn, n, total] : 0]);
+  const key = JSON.stringify([R, p.overlays, p.rects || [], (p.objs || []).map(o => [o.asset, o.cx, o.cy, o.w, o.h, o.rot, o.op]), set.wm, set.pn.on ? [set.pn, n, total] : 0]);
+  await ensureAssets([p]);
   const cached = thumbCache.get(p.id);
   let canvas;
   if (cached && cached.key === key) canvas = cached.canvas;
@@ -525,7 +545,7 @@ const idxOf = (id) => state.pages.findIndex(p => p.id === id);
 function cloneWithNewIds(p) {
   const map = new Map();
   const rects = (p.rects || []).map(r => { const id = uid++; map.set(r.id, id); return { ...r, id }; });
-  return { ...p, id: uid++, rects, overlays: p.overlays.map(o => ({ ...o, id: uid++, rectId: o.rectId ? map.get(o.rectId) : undefined })) };
+  return { ...p, id: uid++, rects, objs: (p.objs || []).map(o => ({ ...o, id: uid++ })), overlays: p.overlays.map(o => ({ ...o, id: uid++, rectId: o.rectId ? map.get(o.rectId) : undefined })) };
 }
 function rotate(ids, delta) {
   snapshot();
@@ -656,8 +676,8 @@ $('tabbar').addEventListener('click', (e) => {
   const k = t.dataset.tab;
   if (k === 'pages') { if (edActive()) leaveEditor(); }
   else if (k === 'edit') { if (!edActive()) openEditor(idxOf(ed.pid) >= 0 ? ed.pid : state.pages[0].id); }
-  else if (k === 'wm') openSheet('wmSheet');
-  else if (k === 'pn') openSheet('pnSheet');
+  else if (k === 'insert') openSheet('insertSheet');
+  else if (k === 'tools') openTools();
 });
 $('selDone').onclick = stopSelecting;
 $('selAllBtn').onclick = () => {
@@ -707,7 +727,11 @@ async function buildPdf(pages) {
     }
     for (const st of stampList(p, pg, vp, n, pages.length, set)) {
       let img = embedded.get(st.img.key);
-      if (!img) { img = await out.embedPng(st.img.canvas.toDataURL('image/png')); embedded.set(st.img.key, img); }
+      if (!img) {
+        const src = st.img.src || st.img.canvas.toDataURL('image/png');
+        img = src.startsWith('data:image/jpeg') ? await out.embedJpg(src) : await out.embedPng(src);
+        embedded.set(st.img.key, img);
+      }
       const [ux, uy] = vp.convertToPdfPoint(st.cx, st.cy);
       const th = (st.a + R) * Math.PI / 180;   // angle in PDF user space (counter-clockwise)
       const hw = st.img.w / 2, hh = st.img.h / 2;
@@ -758,7 +782,7 @@ $('dlSelBtn').onclick = exportSelected;
 $('extractBtn').onclick = exportSelected;
 
 /* ---------- Page editor: new text, edit existing text, erase area ---------- */
-const ed = { pid: null, selId: null, selRect: null, vp: null, pg: null, base: null, R: 0, scale: 1, fit: 1, zoom: 1, renderTok: 0, canvas: null, drag: null, draw: null, tap: null, pinch: null, mode: 'text', items: [] };
+const ed = { pid: null, selId: null, selRect: null, selObj: null, odrag: null, shape: 'rect', vp: null, pg: null, base: null, R: 0, scale: 1, fit: 1, zoom: 1, renderTok: 0, canvas: null, drag: null, draw: null, tap: null, pinch: null, mode: 'text', items: [] };
 const edPage = () => state.pages.find(p => p.id === ed.pid);
 const edSel = () => edPage()?.overlays.find(o => o.id === ed.selId);
 const HINTS = {
@@ -775,11 +799,23 @@ async function openEditor(id) {
   renderGrid();
   await drawEditor();
 }
+const DRAW_INFO = {
+  rect: ['i-square', 'גררו על העמוד כדי לצייר מלבן'], ellipse: ['i-circle', 'גררו על העמוד כדי לצייר עיגול'],
+  line: ['i-line', 'גררו על העמוד כדי למתוח קו'], arrow: ['i-arrow', 'גררו על העמוד כדי לצייר חץ, מההתחלה אל הקצה'],
+  mark: ['i-marker', 'הקישו על מילה כדי להדגיש אותה, או גררו על אזור'],
+};
 function setMode(m) {
-  ed.mode = m; ed.selId = null; ed.selRect = null;
+  ed.mode = m; ed.selId = null; ed.selRect = null; ed.selObj = null;
   document.querySelectorAll('#edModes .mode').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.mode === m)));
   $('stage').dataset.mode = m;
-  $('edTextTools').classList.toggle('off', m === 'erase');
+  const drawing = m === 'shape' || m === 'mark';
+  $('drawBanner').hidden = !drawing;
+  if (drawing) {
+    const [icon, label] = DRAW_INFO[m === 'mark' ? 'mark' : ed.shape];
+    $('drawIcon').querySelector('use').setAttribute('href', '#' + icon);
+    $('drawLabel').textContent = label;
+  }
+  $('edTextTools').classList.toggle('off', m === 'erase' || drawing);
   $('unitSeg').hidden = m !== 'edit';
   drawOverlays();
 }
@@ -931,7 +967,7 @@ function positionOv(el, o) {
 }
 function drawOverlays() {
   const stage = $('stage'), p = edPage(); if (!p || !ed.vp) return;
-  stage.querySelectorAll('.ov, .er, .ti').forEach(el => el.remove());
+  stage.querySelectorAll('.ov, .er, .ti, .obj').forEach(el => el.remove());
   const rects = p.rects || [];
   for (const r of rects) {
     const v = toView(r);
@@ -942,7 +978,8 @@ function drawOverlays() {
     if (!r.link) el.appendChild(xButton('ביטול המחיקה'));
     stage.appendChild(el);
   }
-  if (ed.mode === 'edit') {
+  drawObjects(p);
+  if (ed.mode === 'edit' || ed.mode === 'mark') {
     const covers = (p.rects || []).filter(r => r.link);
     for (const u of getUnits()) {
       const cx = (u.x1 + u.x2) / 2, cy = u.y + u.h * 0.3;
@@ -1185,6 +1222,19 @@ $('stage').addEventListener('pointerdown', (e) => {
   try { $('stage').setPointerCapture(e.pointerId); } catch (_) {}
   if (pointers.size === 2) { startPinch(); return; }
   if (pointers.size > 2) return;
+  const rsEl = e.target.closest('.rs');
+  const objEl = e.target.closest('.obj');
+  if (objEl && ed.mode !== 'shape') {
+    const o = (p.objs || []).find(x => x.id === +objEl.dataset.id);
+    if (o) {
+      selectObj(o.id);
+      const [cx, cy] = ed.vp.convertToViewportPoint(o.cx, o.cy);
+      const [mx, my] = stagePoint(e);
+      ed.odrag = rsEl ? { o, resize: true, cx, cy, w0: o.w, h0: o.h, d0x: Math.abs(mx - cx), d0y: Math.abs(my - cy), moved: false }
+                      : { o, dx: mx - cx, dy: my - cy, moved: false };
+      return;
+    }
+  }
   const xb = e.target.closest('.x');
   if (xb) {
     snapshot();
@@ -1211,14 +1261,15 @@ $('stage').addEventListener('pointerdown', (e) => {
   }
   const tiEl = e.target.closest('.ti');
   if (tiEl && ed.mode === 'edit') { startTap(e, 'ti', { i: +tiEl.dataset.i }); return; }
-  if (ed.selId || ed.selRect) {
-    ed.selId = null; ed.selRect = null; drawOverlays();
-    if (ed.mode !== 'erase') { startTap(e, 'none'); return; }
+  if (tiEl && ed.mode === 'mark') { startTap(e, 'mk', { i: +tiEl.dataset.i }); return; }
+  if (ed.selId || ed.selRect || ed.selObj) {
+    ed.selId = null; ed.selRect = null; ed.selObj = null; drawOverlays();
+    if (!['erase', 'shape', 'mark'].includes(ed.mode)) { startTap(e, 'none'); return; }
   }
-  if (ed.mode === 'erase') {
+  if (ed.mode === 'erase' || ed.mode === 'shape' || ed.mode === 'mark') {
     const [x, y] = stagePoint(e);
     const el = document.createElement('div');
-    el.className = 'er drawing';
+    el.className = 'er drawing' + (ed.mode === 'shape' ? ' shape' : ed.mode === 'mark' ? ' mark' : '');
     $('stage').appendChild(el);
     ed.draw = { x0: x, y0: y, el, x, y };
     return;
@@ -1242,6 +1293,7 @@ $('stage').addEventListener('pointermove', (e) => {
     if (t.pan) { const body = $('edBody'); body.scrollLeft = t.sl - dx; body.scrollTop = t.st - dy; }
     return;
   }
+  if (ed.odrag) { moveObj(e); return; }
   if (ed.draw) {
     const [x, y] = stagePoint(e);
     Object.assign(ed.draw, { x, y });
@@ -1263,6 +1315,11 @@ function doTap(t, e) {
   if (t.kind === 'ti') {
     const u = getUnits().find(x => x.id === t.i);
     if (u) replaceUnit(p, u);
+    return;
+  }
+  if (t.kind === 'mk') {
+    const u = getUnits().find(x => x.id === t.i);
+    if (u) { const v = toView(unitBox(u)); addShapeFromView('mark', v.left, v.top, v.left + v.width, v.top + v.height); }
     return;
   }
   if (t.kind !== 'add') return;
@@ -1290,11 +1347,18 @@ function endPointer(e) {
     return;
   }
   ed.drag = null;
+  if (ed.odrag) { endObjDrag(); return; }
   const d = ed.draw; if (!d) return;
   ed.draw = null;
   d.el.remove();
   if (e.type !== 'pointerup') return;
   const w = Math.abs(d.x - d.x0), h = Math.abs(d.y - d.y0);
+  if (ed.mode === 'shape' || ed.mode === 'mark') {
+    const isLine = ed.mode === 'shape' && (ed.shape === 'line' || ed.shape === 'arrow');
+    if (isLine ? Math.hypot(w, h) < 8 : (w < 4 || h < 4)) return;
+    addShapeFromView(ed.mode === 'mark' ? 'mark' : ed.shape, d.x0, d.y0, d.x, d.y);
+    return;
+  }
   if (w < 4 || h < 4) return;
   const p = edPage();
   const v = { left: Math.min(d.x0, d.x), top: Math.min(d.y0, d.y), width: w, height: h };
@@ -1356,7 +1420,8 @@ function syncFmtBar() {
 /* Above the selected text (or below it when there is no room); docked at the top of the page area otherwise */
 function positionFmtBar() {
   const bar = $('fmtBar');
-  const show = edActive() && ed.mode !== 'erase' && (!!ed.selId || fmtOpen);
+  positionObjBar();
+  const show = edActive() && !['erase', 'shape', 'mark'].includes(ed.mode) && !ed.selObj && (!!ed.selId || fmtOpen);
   bar.hidden = !show;
   if (!show) return;
   const view = $('editView').getBoundingClientRect(), body = $('edBody').getBoundingClientRect();
@@ -1497,6 +1562,7 @@ document.querySelectorAll('#edModes .mode').forEach(b => b.addEventListener('cli
 document.addEventListener('keydown', (e) => {
   if (!edActive()) return;
   const typing = /^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement?.tagName);
+  if ((e.key === 'Delete' || e.key === 'Backspace') && !typing && ed.selObj) { e.preventDefault(); deleteObj(); return; }
   if ((e.key === 'Delete' || e.key === 'Backspace') && !typing && (ed.selId || ed.selRect)) {
     e.preventDefault(); snapshot();
     const p = edPage();
@@ -1512,6 +1578,392 @@ window.addEventListener('resize', () => { if (edActive() && ed.pg) { clearTimeou
 ensureFont('heebo').then(() => { if (state.pages.length) renderGrid(); });
 onSettings();
 renderGrid();
+
+/* ---------- Objects: signatures, images, shapes, highlights ---------- */
+const SHAPE_COLORS = ['#c0392b', '#1a3fb0', '#0f766e', '#111827', '#f59e0b', '#7c3aed'];
+const MARK_COLORS = ['#ffe94d', '#9be27a', '#7cd3ff', '#ff9ccf', '#ffb870'];
+const edObj = () => (edPage()?.objs || []).find(o => o.id === ed.selObj);
+function selectObj(id) { ed.selObj = id; ed.selId = null; ed.selRect = null; drawOverlays(); }
+function drawObjects(p) {
+  const stage = $('stage');
+  for (const o of p.objs || []) {
+    const el = document.createElement('div');
+    el.className = 'obj' + (o.id === ed.selObj ? ' sel' : '');
+    el.dataset.id = o.id;
+    placeObjEl(el, o);
+    const im = document.createElement('img');
+    im.src = assets.get(o.asset) || ''; im.alt = ''; im.draggable = false;
+    im.style.opacity = o.op ?? 1;
+    el.appendChild(im);
+    const rs = document.createElement('span'); rs.className = 'rs'; rs.setAttribute('aria-label', 'שינוי גודל');
+    el.appendChild(rs);
+    stage.appendChild(el);
+  }
+}
+function placeObjEl(el, o) {
+  const [cx, cy] = ed.vp.convertToViewportPoint(o.cx, o.cy);
+  Object.assign(el.style, { left: cx + 'px', top: cy + 'px', width: o.w * ed.scale + 'px', height: o.h * ed.scale + 'px',
+    transform: `translate(-50%, -50%) rotate(${-(o.ang - ed.R + (o.rot || 0))}deg)` });
+}
+function moveObj(e) {
+  const g = ed.odrag, o = g.o;
+  if (!g.moved) { snapshot(); g.moved = true; }
+  const [mx, my] = stagePoint(e);
+  if (g.resize) {
+    const fx = Math.abs(mx - g.cx) / Math.max(4, g.d0x), fy = Math.abs(my - g.cy) / Math.max(4, g.d0y);
+    if (o.keep) { const f = Math.max(0.05, Math.max(fx, fy)); o.w = Math.max(8, g.w0 * f); o.h = Math.max(8, g.h0 * f); }
+    else { o.w = Math.max(6, g.w0 * fx); o.h = Math.max(6, g.h0 * fy); }
+  } else {
+    [o.cx, o.cy] = ed.vp.convertToPdfPoint(mx - g.dx, my - g.dy);
+  }
+  const el = $('stage').querySelector(`.obj[data-id="${o.id}"]`);
+  if (el) placeObjEl(el, o);
+  positionObjBar();
+}
+function endObjDrag() {
+  const g = ed.odrag; ed.odrag = null;
+  if (g.resize && g.moved && g.o.kind === 'shape') { renderShape(g.o); }   // keep line widths crisp after resizing
+  drawOverlays();
+  if (g.moved) renderGrid();
+}
+/* Shapes are drawn into a picture; resizing redraws them so lines keep their thickness */
+function renderShape(o) {
+  const K = Math.min(4, 2400 / Math.max(o.w, o.h, 1));
+  const c = document.createElement('canvas');
+  c.width = Math.max(2, Math.round(o.w * K)); c.height = Math.max(2, Math.round(o.h * K));
+  const x = c.getContext('2d');
+  x.scale(K, K);
+  const sw = o.sw || 2.5, w = o.w, h = o.h;
+  x.strokeStyle = o.color; x.fillStyle = o.color; x.lineWidth = sw; x.lineCap = 'round'; x.lineJoin = 'round';
+  if (o.shape === 'mark') { x.fillRect(0, 0, w, h); }
+  else if (o.shape === 'rect') {
+    if (o.fill) { x.globalAlpha = 0.25; x.fillRect(sw / 2, sw / 2, w - sw, h - sw); x.globalAlpha = 1; }
+    x.strokeRect(sw / 2, sw / 2, w - sw, h - sw);
+  } else if (o.shape === 'ellipse') {
+    x.beginPath(); x.ellipse(w / 2, h / 2, Math.max(1, w / 2 - sw / 2), Math.max(1, h / 2 - sw / 2), 0, 0, Math.PI * 2);
+    if (o.fill) { x.globalAlpha = 0.25; x.fill(); x.globalAlpha = 1; }
+    x.stroke();
+  } else {
+    const pad = o.pad || 0;
+    const ax = o.fx ? w - pad : pad, ay = o.fy ? h - pad : pad, bx = o.fx ? pad : w - pad, by = o.fy ? pad : h - pad;
+    x.beginPath(); x.moveTo(ax, ay); x.lineTo(bx, by); x.stroke();
+    if (o.shape === 'arrow') {
+      const ang = Math.atan2(by - ay, bx - ax), L = Math.max(9, sw * 4);
+      x.beginPath();
+      x.moveTo(bx, by); x.lineTo(bx - L * Math.cos(ang - 0.45), by - L * Math.sin(ang - 0.45));
+      x.lineTo(bx - L * Math.cos(ang + 0.45), by - L * Math.sin(ang + 0.45)); x.closePath(); x.fill();
+    }
+  }
+  o.asset = addAsset(c.toDataURL('image/png'));
+}
+/* A shape or highlight drawn from (x0,y0) to (x1,y1) in screen coordinates of the page */
+function addShapeFromView(kind, x0, y0, x1, y1) {
+  const p = edPage(); if (!p) return;
+  const s = ed.scale, isLine = kind === 'line' || kind === 'arrow';
+  const sw = 2.5, pad = isLine ? Math.max(8, sw * 4) : 0;
+  const w = Math.abs(x1 - x0) / s + pad * 2, h = Math.abs(y1 - y0) / s + pad * 2;
+  const [cx, cy] = ed.vp.convertToPdfPoint((x0 + x1) / 2, (y0 + y1) / 2);
+  const o = {
+    id: uid++, kind: kind === 'mark' ? 'mark' : 'shape', shape: kind, cx, cy, w, h, ang: ed.R, rot: 0,
+    color: kind === 'mark' ? MARK_COLORS[0] : (prefs.shapeColor || SHAPE_COLORS[0]), sw, pad, fx: x1 < x0, fy: y1 < y0,
+    op: kind === 'mark' ? 0.45 : 1, keep: false,
+  };
+  renderShape(o);
+  snapshot();
+  p.objs = p.objs || []; p.objs.push(o);
+  if (kind !== 'mark') { setMode('text'); }
+  selectObj(o.id);
+  renderGrid();
+}
+/* Where a new picture goes: the middle of the part of the page that is on screen */
+function visibleCenter() {
+  const b = $('edBody').getBoundingClientRect(), r = $('stage').getBoundingClientRect();
+  const x = (Math.max(b.left, r.left) + Math.min(b.right, r.right)) / 2 - r.left;
+  const y = (Math.max(b.top, r.top) + Math.min(b.bottom, r.bottom)) / 2 - r.top;
+  return ed.vp.convertToPdfPoint(Math.max(0, Math.min(r.width, x)), Math.max(0, Math.min(r.height, y)));
+}
+async function addPicture(dataUrl, kind, widthPt) {
+  const p = edPage(); if (!p) return;
+  const im = new Image(); im.src = dataUrl; await im.decode();
+  const asset = addAsset(dataUrl);
+  const w = widthPt, h = w * im.naturalHeight / im.naturalWidth;
+  const [cx, cy] = visibleCenter();
+  const o = { id: uid++, kind, asset, cx, cy, w, h, ang: ed.R, rot: 0, op: 1, keep: true };
+  snapshot();
+  p.objs = p.objs || []; p.objs.push(o);
+  setMode('text');
+  selectObj(o.id);
+  renderGrid();
+  toast('גררו כדי להזיז. העיגול בפינה משנה את הגודל.', 3500);
+}
+function deleteObj() {
+  const p = edPage(); if (!p || !ed.selObj) return;
+  snapshot();
+  p.objs = (p.objs || []).filter(o => o.id !== ed.selObj);
+  ed.selObj = null; drawOverlays(); renderGrid();
+}
+
+/* Object toolbar: colour, line thickness, fill, duplicate, delete */
+function positionObjBar() {
+  const bar = $('objBar'), o = edActive() ? edObj() : null;
+  bar.hidden = !o;
+  if (!o) return;
+  const shape = o.kind === 'shape', mark = o.kind === 'mark';
+  const colors = mark ? MARK_COLORS : SHAPE_COLORS;
+  const box = $('obColors');
+  if (box.dataset.for !== o.kind + ':' + o.color) {
+    box.replaceChildren(...((shape || mark) ? colors.map(col => {
+      const b = document.createElement('button');
+      b.type = 'button'; b.style.background = col; b.dataset.col = col; b.setAttribute('aria-label', 'צבע');
+      b.setAttribute('aria-pressed', String(o.color === col));
+      return b;
+    }) : []));
+    box.dataset.for = o.kind + ':' + o.color;
+  }
+  box.hidden = !(shape || mark); $('obSep').hidden = !(shape || mark);
+  const isLine = shape && (o.shape === 'line' || o.shape === 'arrow');
+  $('obThin').hidden = $('obThick').hidden = !shape;
+  $('obFill').hidden = !(shape && !isLine);
+  $('obThin').setAttribute('aria-pressed', String((o.sw || 2.5) < 3));
+  $('obThick').setAttribute('aria-pressed', String((o.sw || 2.5) >= 3));
+  $('obFill').setAttribute('aria-pressed', String(!!o.fill));
+  const el = $('stage').querySelector(`.obj[data-id="${o.id}"]`);
+  const view = $('editView').getBoundingClientRect(), body = $('edBody').getBoundingClientRect();
+  const bw = bar.offsetWidth, bh = bar.offsetHeight;
+  const minTop = body.top - view.top + 8;
+  let top = minTop, left = (view.width - bw) / 2;
+  if (el) {
+    const r = el.getBoundingClientRect();
+    if (r.bottom > body.top && r.top < body.bottom) {
+      top = r.top - view.top - bh - 16;
+      if (top < minTop) top = r.bottom - view.top + 18;
+      if (top + bh > body.bottom - view.top - 4) top = minTop;
+      left = r.left + r.width / 2 - view.left - bw / 2;
+    }
+  }
+  bar.style.top = Math.max(minTop, top) + 'px';
+  bar.style.left = Math.max(8, Math.min(view.width - bw - 8, left)) + 'px';
+}
+function editObj(patch) {
+  const o = edObj(); if (!o) return;
+  snapshot(); Object.assign(o, patch);
+  if (o.kind === 'shape' || o.kind === 'mark') renderShape(o);
+  if (patch.color && o.kind === 'shape') { prefs.shapeColor = patch.color; savePrefs(); }
+  drawOverlays(); renderGrid();
+}
+$('obColors').addEventListener('click', (e) => { const b = e.target.closest('[data-col]'); if (b) editObj({ color: b.dataset.col }); });
+$('obThin').onclick = () => editObj({ sw: 1.5 });
+$('obThick').onclick = () => editObj({ sw: 4.5 });
+$('obFill').onclick = () => { const o = edObj(); if (o) editObj({ fill: !o.fill }); };
+$('obDel').onclick = deleteObj;
+$('obDup').onclick = () => {
+  const p = edPage(), o = edObj(); if (!p || !o) return;
+  snapshot();
+  const off = 14;
+  const [vx, vy] = ed.vp.convertToViewportPoint(o.cx, o.cy);
+  const [cx, cy] = ed.vp.convertToPdfPoint(vx + off, vy + off);
+  const c = { ...o, id: uid++, cx, cy };
+  p.objs.push(c); selectObj(c.id); renderGrid();
+};
+
+/* ---------- Insert sheet ---------- */
+async function ensureEditor() {
+  if (!edActive()) await openEditor(idxOf(ed.pid) >= 0 ? ed.pid : state.pages[0].id);
+}
+$('insertSheet').addEventListener('click', async (e) => {
+  const b = e.target.closest('[data-ins]'); if (!b) return;
+  const k = b.dataset.ins;
+  closeSheets();
+  if (k === 'sign') { openSignature(); return; }
+  if (k === 'image') { $('imgInput').click(); return; }
+  await ensureEditor();
+  if (k === 'mark') { setMode('mark'); return; }
+  if (['rect', 'ellipse', 'line', 'arrow'].includes(k)) { ed.shape = k; setMode('shape'); return; }
+  if (k === 'text') { setMode('text'); fmtOpen = true; syncFmtBar(); $('edText').focus(); toast('כתבו את הטקסט והקישו על המקום בעמוד', 3500); return; }
+  if (k === 'date') {
+    const p = edPage(), d = new Date();
+    const text = `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
+    const [px, py] = visibleCenter();
+    const o = { id: uid++, text, ...styleCopy(defStyle), px, py, ang: ed.R };
+    snapshot(); p.overlays.push(o);
+    setMode('text'); ed.selId = o.id; loadFields(o); drawOverlays(); renderGrid();
+  }
+});
+$('drawDone').onclick = () => setMode('text');
+
+/* Images: shrink big photos so the PDF stays small */
+function readImage(file, maxSide = 1800) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file), im = new Image();
+    im.onload = () => {
+      const k = Math.min(1, maxSide / Math.max(im.naturalWidth, im.naturalHeight));
+      const c = document.createElement('canvas');
+      c.width = Math.round(im.naturalWidth * k); c.height = Math.round(im.naturalHeight * k);
+      const x = c.getContext('2d');
+      const png = file.type === 'image/png' || file.type === 'image/gif' || file.type === 'image/webp';
+      if (!png) { x.fillStyle = '#fff'; x.fillRect(0, 0, c.width, c.height); }
+      x.drawImage(im, 0, 0, c.width, c.height);
+      URL.revokeObjectURL(url);
+      resolve({ url: png ? c.toDataURL('image/png') : c.toDataURL('image/jpeg', 0.86), w: c.width, h: c.height });
+    };
+    im.onerror = () => { URL.revokeObjectURL(url); reject(new Error('bad image')); };
+    im.src = url;
+  });
+}
+$('imgInput').onchange = async (e) => {
+  const f = e.target.files[0]; e.target.value = '';
+  if (!f) return;
+  try {
+    const img = await readImage(f);
+    await ensureEditor();
+    await addPicture(img.url, 'img', ed.base.width * 0.45);
+  } catch (_) { toast('לא הצלחתי לפתוח את התמונה. נסו תמונה אחרת.', 4000); }
+};
+
+/* ---------- Tools sheet ---------- */
+function openTools() {
+  const s0 = settings();
+  $('wmState').textContent = s0.wm.on ? `פעיל: "${s0.wm.text}"` : 'כבוי';
+  $('pnState').textContent = s0.pn.on ? 'פעיל' : 'כבוי';
+  openSheet('toolsSheet');
+}
+$('toolsSheet').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-tool]'); if (!b) return;
+  const k = b.dataset.tool;
+  if (k === 'wm') openSheet('wmSheet');
+  else if (k === 'pn') openSheet('pnSheet');
+  else if (k === 'addpdf') { closeSheets(); $('fileInput').click(); }
+  else if (k === 'imgpages') { closeSheets(); $('imgPagesInput').click(); }
+  else if (k === 'select') { closeSheets(); if (edActive()) leaveEditor(); startSelecting(); }
+});
+/* Photos become A4 pages (portrait or landscape to match each photo) */
+$('imgPagesInput').onchange = async (e) => {
+  const files = [...e.target.files]; e.target.value = '';
+  if (!files.length) return;
+  busy(true, 'הופך תמונות לעמודים…');
+  try {
+    const doc = await PDFDocument.create();
+    for (const f of files) {
+      const img = await readImage(f, 2200);
+      const emb = img.url.startsWith('data:image/jpeg') ? await doc.embedJpg(img.url) : await doc.embedPng(img.url);
+      const land = img.w > img.h, W = land ? 841.89 : 595.28, H = land ? 595.28 : 841.89, m = 18;
+      const k = Math.min((W - 2 * m) / img.w, (H - 2 * m) / img.h);
+      const page = doc.addPage([W, H]);
+      page.drawImage(emb, { x: (W - img.w * k) / 2, y: (H - img.h * k) / 2, width: img.w * k, height: img.h * k });
+    }
+    const before = JSON.stringify(state.pages);
+    await addBytes(await doc.save(), files.length === 1 ? 'תמונה.pdf' : 'תמונות.pdf');
+    history.push(before); $('undoBtn').disabled = false;
+    renderGrid();
+    toast(files.length === 1 ? 'התמונה נוספה כעמוד' : `${files.length} תמונות נוספו כעמודים`);
+  } catch (_) { toast('לא הצלחתי להוסיף את התמונות. נסו שוב.', 4000); }
+  finally { busy(false); }
+};
+
+/* ---------- Signature ---------- */
+const SIG_COLORS = ['#111827', '#1a3fb0', '#0f766e'];
+const sig = { strokes: [], color: SIG_COLORS[0], drawing: null };
+function loadSigs() { try { return JSON.parse(localStorage.getItem('mypdf.sigs') || '[]'); } catch (_) { return []; } }
+function saveSigs(list) { try { localStorage.setItem('mypdf.sigs', JSON.stringify(list.slice(0, 4))); } catch (_) {} }
+function openSignature() {
+  sig.strokes = []; $('sigUse').disabled = true;
+  renderSavedSigs();
+  $('sigColors').replaceChildren(...SIG_COLORS.map(col => {
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = 'swb sm'; b.style.background = col; b.setAttribute('aria-label', 'צבע החתימה');
+    b.setAttribute('aria-pressed', String(sig.color === col));
+    b.onclick = () => { sig.color = col; $('sigColors').querySelectorAll('.swb').forEach(x => x.setAttribute('aria-pressed', String(x === b))); paintSig(); };
+    return b;
+  }));
+  openSheet('sigSheet');
+  requestAnimationFrame(sizeSigPad);
+}
+function renderSavedSigs() {
+  const list = loadSigs();
+  $('sigSavedWrap').hidden = !list.length;
+  $('sigPadLabel').textContent = list.length ? 'או חתימה חדשה: חתמו באצבע בתוך המסגרת' : 'חתמו באצבע או בעכבר בתוך המסגרת';
+  $('sigSaved').replaceChildren(...list.map((url, i) => {
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = 'sig-item'; b.setAttribute('aria-label', 'הוספת החתימה השמורה');
+    const im = document.createElement('img'); im.src = url; im.alt = '';
+    const del = document.createElement('span'); del.className = 'sig-del'; del.setAttribute('aria-label', 'מחיקת החתימה השמורה');
+    del.innerHTML = '<svg class="i"><use href="#i-x"/></svg>';
+    b.append(im, del);
+    b.onclick = async (ev) => {
+      if (ev.target.closest('.sig-del')) { const l = loadSigs(); l.splice(i, 1); saveSigs(l); renderSavedSigs(); return; }
+      closeSheets(); await placeSignature(url);
+    };
+    return b;
+  }));
+}
+function sizeSigPad() {
+  const c = $('sigPad'), r = c.getBoundingClientRect(), dpr = Math.min(3, window.devicePixelRatio || 1);
+  c.width = Math.round(r.width * dpr); c.height = Math.round(r.height * dpr);
+  paintSig();
+}
+function paintSig() {
+  const c = $('sigPad'), x = c.getContext('2d'), dpr = c.width / (c.getBoundingClientRect().width || 1);
+  x.setTransform(1, 0, 0, 1, 0, 0); x.clearRect(0, 0, c.width, c.height); x.setTransform(dpr, 0, 0, dpr, 0, 0);
+  x.strokeStyle = sig.color; x.lineCap = 'round'; x.lineJoin = 'round';
+  for (const st of sig.strokes) {
+    if (st.length === 1) { x.fillStyle = sig.color; x.beginPath(); x.arc(st[0].x, st[0].y, 1.4, 0, Math.PI * 2); x.fill(); continue; }
+    // smooth curve through the points; faster strokes come out a little thinner, like ink
+    for (let i = 1; i < st.length; i++) {
+      const a = st[i - 1], b = st[i];
+      x.lineWidth = Math.max(1.3, 3.2 - Math.min(2, Math.hypot(b.x - a.x, b.y - a.y) / 9));
+      x.beginPath();
+      const mx0 = i > 1 ? (st[i - 2].x + a.x) / 2 : a.x, my0 = i > 1 ? (st[i - 2].y + a.y) / 2 : a.y;
+      x.moveTo(mx0, my0); x.quadraticCurveTo(a.x, a.y, (a.x + b.x) / 2, (a.y + b.y) / 2); x.stroke();
+    }
+  }
+}
+const sigPt = (e) => { const r = $('sigPad').getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; };
+$('sigPad').addEventListener('pointerdown', (e) => {
+  e.preventDefault(); $('sigPad').setPointerCapture(e.pointerId);
+  sig.drawing = [sigPt(e)]; sig.strokes.push(sig.drawing); paintSig();
+});
+$('sigPad').addEventListener('pointermove', (e) => { if (!sig.drawing) return; sig.drawing.push(sigPt(e)); paintSig(); });
+['pointerup', 'pointercancel'].forEach(t => $('sigPad').addEventListener(t, () => { if (sig.drawing) { sig.drawing = null; $('sigUse').disabled = !sig.strokes.length; } }));
+$('sigClear').onclick = () => { sig.strokes = []; $('sigUse').disabled = true; paintSig(); };
+/* Cut the empty space around the signature and keep a transparent background */
+function sigImage() {
+  const c = $('sigPad'), x = c.getContext('2d');
+  const d = x.getImageData(0, 0, c.width, c.height).data;
+  let x0 = c.width, y0 = c.height, x1 = 0, y1 = 0;
+  for (let y = 0; y < c.height; y++) for (let xx = 0; xx < c.width; xx++) {
+    if (d[(y * c.width + xx) * 4 + 3] > 8) { if (xx < x0) x0 = xx; if (xx > x1) x1 = xx; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+  }
+  if (x1 <= x0 || y1 <= y0) return null;
+  const pad = 6, w = x1 - x0 + pad * 2, h = y1 - y0 + pad * 2;
+  const o = document.createElement('canvas'); o.width = w; o.height = h;
+  o.getContext('2d').drawImage(c, x0 - pad, y0 - pad, w, h, 0, 0, w, h);
+  return o.toDataURL('image/png');
+}
+$('sigUse').onclick = async () => {
+  const url = sigImage(); if (!url) return;
+  if ($('sigKeep').checked) { const l = loadSigs().filter(u => u !== url); l.unshift(url); saveSigs(l); }
+  closeSheets();
+  await placeSignature(url);
+};
+async function placeSignature(url) {
+  await ensureEditor();
+  await addPicture(url, 'sig', Math.min(170, ed.base.width * 0.32));
+}
+
+/* ---------- Share the finished PDF ---------- */
+const canShareFiles = (() => { try { return !!(navigator.canShare && navigator.canShare({ files: [new File([new Uint8Array(1)], 'a.pdf', { type: 'application/pdf' })] })); } catch (_) { return false; } })();
+$('shareBtn').hidden = !canShareFiles;
+$('shareBtn').onclick = async () => {
+  closeSheets();
+  busy(true, 'מכין את הקובץ לשיתוף…');
+  let bytes;
+  try { bytes = await buildPdf(state.pages); } catch (e) { busy(false); toast('יצירת הקובץ נכשלה.', 5000); return; }
+  busy(false);
+  const name = outName();
+  const file = new File([bytes], name, { type: 'application/pdf' });
+  try { await navigator.share({ files: [file], title: name }); }
+  catch (e) { if (e && e.name !== 'AbortError') { saveBytes(bytes, name); toast('השיתוף לא זמין כאן, אז הקובץ ירד למכשיר.', 4500); } }
+};
 
 /* ---------- App: offline support and installing to the home screen ---------- */
 if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
