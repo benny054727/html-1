@@ -662,3 +662,16 @@ input[type=search] { width: 100%; border: 1px solid var(--line); background: var
 .er.drawing.redact-draw { background: rgba(0,0,0,.75); outline: 0; }
 .secure-row { align-items: flex-start; font-weight: 400; font-size: 14px; line-height: 1.45; background: var(--surface-2); border-radius: 12px; padding: 10px 12px; }
 .secure-row input { margin-top: 2px; flex: none; }
+
+/* Form fields in the editor */
+.stage .ff {
+  position: absolute; z-index: 3; box-sizing: border-box; margin: 0; padding: 0 3px; border-radius: 2px;
+  border: 1px solid rgba(37, 99, 235, .55); background: rgba(219, 234, 254, .55); color: #111827;
+  font-family: "Arimo", Arial, sans-serif; line-height: 1.15; min-width: 0; min-height: 0; resize: none;
+}
+.stage .ff:focus { outline: 2px solid var(--accent); background: rgba(255, 255, 255, .95); }
+.stage textarea.ff { padding-top: 2px; overflow: auto; }
+.stage select.ff { padding: 0 2px; }
+.stage .ff-check, .stage .ff-radio { display: grid; place-items: center; padding: 0; cursor: pointer; font-weight: 700; color: #111827; }
+.stage .ff-radio { border-radius: 50%; font-size: 70% !important; }
+.stage .ff.ro { opacity: .6; cursor: not-allowed; }
