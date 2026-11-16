@@ -172,27 +172,58 @@ const fontWeight = (k, bold) => { const w = (FONTS[k] || {}).w || 400; return bo
 const fontStack = (k) => `"${(FONTS[k] || FONTS.heebo).family}", Heebo, Arial, sans-serif`;
 
 /* The text is drawn into an image with a known baseline (asc from the top), so it can sit exactly on a line */
-function textImage(text, size, color, bold, fontKey) {
-  const key = [text, size, color, bold, fontKey || 'heebo'].join('\u0001');
+function textImage(text, size, color, bold, fontKey, fx) {
+  fx = fx || {};
+  const key = [text, size, color, bold, fontKey || 'heebo', fx.it ? 1 : 0, fx.u ? 1 : 0, fx.st ? 1 : 0, fx.hl || '', fx.align || '', fx.lh || '', fx.ls || ''].join('\u0001');
   if (textImgCache.has(key)) return textImgCache.get(key);
   const font = `${fontWeight(fontKey, bold)} ${size}px ${fontStack(fontKey)}`;
-  measureCtx.font = font;
-  const pad = size * 0.1;
-  const w = Math.max(1, measureCtx.measureText(text).width) + pad * 2;
-  const asc = size * 1.0, h = size * 1.3;
+  const ls = (fx.ls || 0) * size;
+  const setLS = (ctx) => { if ('letterSpacing' in ctx) ctx.letterSpacing = ls + 'px'; };
+  const lines = String(text).split('\n');
+  measureCtx.font = font; setLS(measureCtx);
+  const widths = lines.map(l => Math.max(0, measureCtx.measureText(l).width));
+  if ('letterSpacing' in measureCtx) measureCtx.letterSpacing = '0px';
+  const tw = Math.max(1, ...widths);
+  const pad = size * 0.1, slant = fx.it ? 0.2 : 0, extra = slant * size;
+  const lh = (fx.lh || 1.2) * size, asc = size * 1.0;
+  const w = tw + pad * 2 + extra;
+  const h = asc + (lines.length - 1) * lh + size * 0.3;
   const K = Math.max(0.5, Math.min(8, 4000 / w, 4000 / h));
   const c = document.createElement('canvas');
   c.width = Math.ceil(w * K); c.height = Math.ceil(h * K);
   const ctx = c.getContext('2d');
   ctx.scale(K, K);
-  ctx.font = font; ctx.fillStyle = color; ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
-  ctx.direction = isHebrew(text) ? 'rtl' : 'ltr';
-  ctx.fillText(text, w / 2, asc);
-  const out = { canvas: c, w, h, asc, pad, key };
+  ctx.font = font; setLS(ctx);
+  const rtl = isHebrew(text);
+  ctx.direction = rtl ? 'rtl' : 'ltr';
+  ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+  const align = fx.align || (rtl ? 'r' : 'l');
+  const x0s = widths.map(lw => align === 'c' ? pad + (tw - lw) / 2 : align === 'r' ? pad + tw - lw : pad);
+  if (fx.hl) {           // marker behind the words
+    ctx.fillStyle = fx.hl;
+    lines.forEach((l, i) => { if (widths[i]) ctx.fillRect(x0s[i] - pad * 0.6, asc + i * lh - size * 0.9, widths[i] + pad * 1.2 + extra, size * 1.15); });
+  }
+  const th = Math.max(0.5, size * 0.065);
+  lines.forEach((line, i) => {
+    const by = asc + i * lh;
+    ctx.save();
+    ctx.translate(x0s[i], by);
+    if (slant) ctx.transform(1, 0, -slant, 1, 0, 0);      // italic: lean the letters to the right
+    ctx.fillStyle = color;
+    ctx.fillText(line, 0, 0);
+    ctx.restore();
+    ctx.fillStyle = color;
+    if (fx.u && widths[i]) ctx.fillRect(x0s[i], by + size * 0.11, widths[i], th);
+    if (fx.st && widths[i]) ctx.fillRect(x0s[i], by - size * 0.3, widths[i] + extra * 0.4, th);
+  });
+  const out = { canvas: c, w, h, asc, pad, padL: pad, padR: pad + extra, key };
   textImgCache.set(key, out);
   if (textImgCache.size > 300) textImgCache.delete(textImgCache.keys().next().value);
   return out;
 }
+const fxOf = (o) => ({ it: o.it, u: o.u, st: o.st, hl: o.hl, align: o.align, lh: o.lh, ls: o.ls });
+const ovImg = (o) => textImage(o.text || ' ', o.size, o.color, o.bold, o.font, fxOf(o));
+const ovAngle = (o, R) => o.ang - R + (o.rot || 0);
 
 function pageNumberText(fmt, n, t) {
   if (fmt === 'n/t') return `${n} / ${t}`;
@@ -204,10 +235,10 @@ function pageNumberText(fmt, n, t) {
 /* Where an overlay's centre sits on the display. Replaced text is anchored at its start edge. */
 function overlayCenter(o, vp, R) {
   const [x, y] = vp.convertToViewportPoint(o.px, o.py);
-  const img = textImage(o.text || ' ', o.size, o.color, o.bold, o.font);
-  const a = (o.ang - R) * Math.PI / 180, s = vp.scale;
-  // horizontal: the point is the start/end edge of the letters; vertical: the point is on the baseline
-  const hx = (o.anchor === 'l' || o.anchor === 'r') ? (img.w / 2 - img.pad) * (o.anchor === 'l' ? 1 : -1) * s : 0;
+  const img = ovImg(o);
+  const a = ovAngle(o, R) * Math.PI / 180, s = vp.scale;
+  // horizontal: the point is the start/end edge of the letters; vertical: the point is on the first baseline
+  const hx = o.anchor === 'l' ? (img.w / 2 - img.padL) * s : o.anchor === 'r' ? -(img.w / 2 - img.padR) * s : 0;
   const vy = o.vb === 'base' ? (img.h / 2 - img.asc) * s : 0;
   return [x + hx * Math.cos(a) + vy * Math.sin(a), y - hx * Math.sin(a) + vy * Math.cos(a)];
 }
@@ -228,7 +259,7 @@ function stampList(p, pg, vp, n, total, set) {
   for (const o of p.overlays) {
     if (!o.text.trim()) continue;
     const [cx, cy] = overlayCenter(o, vp, R);
-    out.push({ img: textImage(o.text, o.size, o.color, o.bold, o.font), cx, cy, a: o.ang - R, op: 1 });
+    out.push({ img: ovImg(o), cx, cy, a: ovAngle(o, R), op: o.op ?? 1 });
   }
   if (set.wm.on && set.wm.text.trim()) {
     out.push({ img: textImage(set.wm.text, set.wm.size, set.wm.color, true), cx: vp.width / 2, cy: vp.height / 2, a: set.wm.angle, op: set.wm.opacity });
@@ -334,6 +365,7 @@ function showView(v) {
   $('pagesView').hidden = v !== 'pages';
   $('editView').hidden = v !== 'edit';
   document.querySelectorAll('.tab').forEach(t => t.dataset.tab === v ? t.setAttribute('aria-current', 'page') : t.removeAttribute('aria-current'));
+  positionFmtBar();
 }
 function closeSheets() { document.querySelectorAll('dialog[open]').forEach(d => d.close()); }
 function openSheet(id) { closeSheets(); $(id).showModal(); }
@@ -731,7 +763,7 @@ const edPage = () => state.pages.find(p => p.id === ed.pid);
 const edSel = () => edPage()?.overlays.find(o => o.id === ed.selId);
 const HINTS = {
   text: 'כתבו טקסט בשדה למעלה ולחצו על העמוד כדי להוסיף אותו. גוררים טקסט כדי להזיז אותו.',
-  edit: 'לחצו על טקסט מסומן בעמוד כדי לשנות אותו. כדי למחוק מילה, מוחקים את כל הטקסט בשדה. ✕ מחזיר את המקור.',
+  edit: 'לחצו על מילה מסומנת כדי לשנות אותה, או הפעילו "שורה שלמה" כדי לשנות את כל השורה. סל האשפה בסרגל מחזיר את המקור.',
   erase: 'גררו מלבן על האזור שרוצים למחוק. הכיסוי מקבל את צבע הרקע של הדף. שימו לב: הטקסט המקורי נשאר בתוך הקובץ מתחת לכיסוי, ולכן זה לא מתאים להסתרת מידע רגיש.',
 };
 
@@ -748,6 +780,7 @@ function setMode(m) {
   document.querySelectorAll('#edModes .mode').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.mode === m)));
   $('stage').dataset.mode = m;
   $('edTextTools').classList.toggle('off', m === 'erase');
+  $('lineMode').hidden = m !== 'edit';
   drawOverlays();
 }
 async function drawEditor() {
@@ -874,16 +907,21 @@ function sampleBg(v) {
   const c = pts[0];
   return '#' + [c[0], c[1], c[2]].map(n => n.toString(16).padStart(2, '0')).join('');
 }
-function textColorInside(v) {
+function textColorInside(v, bgHex) {
   if (!ed.canvas) return '#000000';
-  // darkest pixel inside the box = the original ink colour
+  const bg = bgHex ? [1, 3, 5].map(i => parseInt(bgHex.slice(i, i + 2), 16)) : [255, 255, 255];
   const ctx = ed.canvas.getContext('2d', { willReadFrequently: true });
   const k = ed.canvas.width / ed.vp.width;
   const x = Math.max(0, Math.round(v.left * k)), y = Math.max(0, Math.round(v.top * k));
   const w = Math.max(1, Math.min(ed.canvas.width - x, Math.round(v.width * k))), h = Math.max(1, Math.min(ed.canvas.height - y, Math.round(v.height * k)));
   const d = ctx.getImageData(x, y, w, h).data;
-  let best = 765, col = [0, 0, 0];
-  for (let i = 0; i < d.length; i += 16) { const s = d[i] + d[i + 1] + d[i + 2]; if (s < best) { best = s; col = [d[i], d[i + 1], d[i + 2]]; } }
+  // the letters are the pixels that stand out most from the background (works for dark text on light pages and light text on dark ones)
+  let best = -1, col = null;
+  for (let i = 0; i < d.length; i += 8) {
+    const dist = (d[i] - bg[0]) ** 2 + (d[i + 1] - bg[1]) ** 2 + (d[i + 2] - bg[2]) ** 2;
+    if (dist > best) { best = dist; col = [d[i], d[i + 1], d[i + 2]]; }
+  }
+  if (!col || best < 900) col = (bg[0] + bg[1] + bg[2]) / 3 > 128 ? [0, 0, 0] : [255, 255, 255];
   return '#' + col.map(n => n.toString(16).padStart(2, '0')).join('');
 }
 
@@ -905,7 +943,7 @@ function drawOverlays() {
     stage.appendChild(el);
   }
   if (ed.mode === 'edit') {
-    const used = new Set(p.overlays.filter(o => o.srcItem != null).map(o => o.srcItem));
+    const used = usedItems(p);
     for (const it of ed.items) {
       if (used.has(it.i)) continue;
       const v = toView(itemBox(it));
@@ -920,19 +958,20 @@ function drawOverlays() {
     el.className = 'ov' + (o.id === ed.selId ? ' sel' : '');
     el.dataset.id = o.id;
     positionOv(el, o);
-    el.style.transform = `translate(-50%, -50%) rotate(${-(o.ang - ed.R)}deg)`;
-    const img = textImage(o.text || ' ', o.size, o.color, o.bold, o.font);
+    el.style.transform = `translate(-50%, -50%) rotate(${-ovAngle(o, ed.R)}deg)`;
+    const img = ovImg(o);
     const cv = document.createElement('canvas');
     cv.width = img.canvas.width; cv.height = img.canvas.height;
     cv.getContext('2d').drawImage(img.canvas, 0, 0);
     cv.style.width = img.w * ed.scale + 'px'; cv.style.height = img.h * ed.scale + 'px';
+    cv.style.opacity = o.op ?? 1;
     el.appendChild(cv);
     if (!o.text) el.classList.add('empty');
-    el.appendChild(xButton(o.srcItem != null ? 'החזרת הטקסט המקורי' : 'מחיקת הטקסט'));
     stage.appendChild(el);
   }
+  syncFmtBar();
   $('edHint').textContent = ed.selId
-    ? 'הטקסט המסומן מתעדכן לפי השדות למעלה. גררו כדי להזיז. ✕ מבטל אותו. לחיצה על אזור ריק מבטלת את הסימון.'
+    ? 'הטקסט המסומן מתעדכן לפי השדה למעלה וסרגל העיצוב. גררו כדי להזיז. לחיצה על אזור ריק מבטלת את הסימון.'
     : HINTS[ed.mode];
   if (ed.mode === 'edit' && !ed.items.length) $('edHint').textContent = 'לא נמצא בעמוד הזה טקסט שאפשר לערוך (ייתכן שזה מסמך סרוק). אפשר למחוק אזור ולכתוב מעליו טקסט חדש.';
 }
@@ -946,8 +985,9 @@ function stagePoint(e) {
   return [Math.max(0, Math.min(ed.vp.width, e.clientX - r.left)), Math.max(0, Math.min(ed.vp.height, e.clientY - r.top))];
 }
 function loadFields(o) {
-  $('edText').value = o.text; $('edSize').value = Math.round(o.size * 10) / 10; $('edColor').value = o.color; $('edBold').checked = o.bold;
-  $('edFont').value = o.font || 'heebo';
+  $('edText').value = o.text;
+  growText();
+  syncFmtBar();
 }
 function removeOverlay(p, id) {
   const o = p.overlays.find(x => x.id === id);
@@ -980,21 +1020,48 @@ function guessFont(it) {
   ensureFont(font).then(() => { if (edActive()) drawOverlays(); });
   return { font, bold };
 }
+const usedItems = (p) => new Set(p.overlays.flatMap(o => o.srcItems || (o.srcItem != null ? [o.srcItem] : [])));
+/* The words around a clicked word that form one line (same baseline and size, close together) */
+function lineItems(p, it) {
+  const h = itemBox(it).h, used = usedItems(p);
+  const same = ed.items.filter(x => !used.has(x.i) && Math.abs(x.transform[5] - it.transform[5]) < h * 0.35 && Math.abs(itemBox(x).h - h) < h * 0.45)
+    .sort((a, b) => a.transform[4] - b.transform[4]);
+  let i = same.findIndex(x => x.i === it.i); if (i < 0) return [it];
+  let lo = i, hi = i;
+  const gap = (a, b) => b.transform[4] - (a.transform[4] + a.width);
+  while (lo > 0 && gap(same[lo - 1], same[lo]) < h * 1.6) lo--;
+  while (hi < same.length - 1 && gap(same[hi], same[hi + 1]) < h * 1.6) hi++;
+  return same.slice(lo, hi + 1);
+}
 function replaceItem(p, it) {
+  const its = prefs.lineMode ? lineItems(p, it) : [it];
   snapshot();
-  const box = itemBox(it);
+  const boxes = its.map(itemBox);
+  const box = { x1: Math.min(...boxes.map(b => b.x1)), y1: Math.min(...boxes.map(b => b.y1)), x2: Math.max(...boxes.map(b => b.x2)), y2: Math.max(...boxes.map(b => b.y2)), h: itemBox(it).h };
   const v = toView(box);
-  const rect = { id: uid++, x1: box.x1, y1: box.y1, x2: box.x2, y2: box.y2, color: sampleBg(v), link: true };
+  const bg = sampleBg(v);
+  const rect = { id: uid++, x1: box.x1, y1: box.y1, x2: box.x2, y2: box.y2, color: bg, link: true };
   p.rects = p.rects || [];
   p.rects.push(rect);
-  // In a Hebrew line, a changed word or number keeps its right edge (the side the line starts from)
-  const rtl = isHebrew(it.str) || ed.items.some(x => Math.abs(x.transform[5] - it.transform[5]) < box.h * 0.3 && isHebrew(x.str));
+  // In a Hebrew line, changed text keeps its right edge (the side the line starts from)
+  const rtl = its.some(x => isHebrew(x.str)) || ed.items.some(x => Math.abs(x.transform[5] - it.transform[5]) < box.h * 0.3 && isHebrew(x.str));
+  // words in reading order, with a space wherever the original had a gap
+  const ordered = [...its].sort((a, b) => rtl ? b.transform[4] - a.transform[4] : a.transform[4] - b.transform[4]);
+  let text = '';
+  ordered.forEach((x, k) => {
+    if (k) {
+      const prev = ordered[k - 1];
+      const g = rtl ? prev.transform[4] - (x.transform[4] + x.width) : x.transform[4] - (prev.transform[4] + prev.width);
+      if (g > box.h * 0.12 && !/\s$/.test(text) && !/^\s/.test(x.str)) text += ' ';
+    }
+    text += x.str;
+  });
   const g = guessFont(it);
   const o = {
-    id: uid++, text: it.str, size: Math.round(box.h * 10) / 10, color: textColorInside(v), bold: g.bold, font: g.font,
+    id: uid++, text, size: Math.round(box.h * 10) / 10, color: textColorInside(v, bg), bold: g.bold, font: g.font,
     // anchored at the start edge of the original words, on the original baseline
-    px: rtl ? it.transform[4] + it.width : it.transform[4], py: it.transform[5], vb: 'base', ang: 0, anchor: rtl ? 'r' : 'l',
-    srcItem: it.i, rectId: rect.id,
+    px: rtl ? box.x2 - box.h * 0.05 : box.x1 + box.h * 0.05, py: it.transform[5], vb: 'base', ang: 0, anchor: rtl ? 'r' : 'l',
+    srcItem: it.i, srcItems: its.map(x => x.i), rectId: rect.id,
   };
   p.overlays.push(o);
   ed.selId = o.id; ed.selRect = null;
@@ -1005,7 +1072,7 @@ function replaceItem(p, it) {
 /* Keep text on a line: replaced text stays on its own baseline, other text snaps to nearby lines */
 function snapToLine(o) {
   hideGuide();
-  if (!$('edLock').checked || ((o.ang % 360) + 360) % 360 !== 0 || o.vb !== 'base') return;
+  if (!prefs.lock || ((o.ang % 360) + 360) % 360 !== 0 || (o.rot || 0) !== 0 || o.vb !== 'base') return;
   let y = null;
   if (o.srcItem != null) {
     const it = ed.items.find(x => x.i === o.srcItem);
@@ -1122,6 +1189,7 @@ $('stage').addEventListener('pointermove', (e) => {
   snapToLine(ed.drag.o);
   const el = $('stage').querySelector(`.ov[data-id="${ed.drag.o.id}"]`);
   if (el) positionOv(el, ed.drag.o);
+  positionFmtBar();
 });
 function doTap(t, e) {
   const p = edPage(); if (!p) return;
@@ -1136,9 +1204,9 @@ function doTap(t, e) {
   snapshot();
   const [x, y] = stagePoint(e);
   const [px, py] = ed.vp.convertToPdfPoint(x, y);
-  const o = { id: uid++, text, size: +$('edSize').value || 18, color: $('edColor').value, bold: $('edBold').checked, font: $('edFont').value, px, py, ang: ed.R, vb: 'base' };
-  // the tap marks the middle of the text; move the anchor down to its baseline
-  const img = textImage(text, o.size, o.color, o.bold, o.font), d = img.asc - img.h / 2, th = o.ang * Math.PI / 180;
+  const o = { id: uid++, text, ...styleCopy(defStyle), px, py, ang: ed.R, vb: 'base' };
+  // the tap marks the middle of the text; move the anchor down to its first baseline
+  const img = ovImg(o), d = img.asc - img.h / 2, th = o.ang * Math.PI / 180;
   o.px += d * Math.sin(th); o.py -= d * Math.cos(th);
   snapToLine(o); hideGuide();
   p.overlays.push(o);
@@ -1175,16 +1243,184 @@ function endPointer(e) {
 $('stage').addEventListener('pointerup', endPointer);
 $('stage').addEventListener('pointercancel', endPointer);
 
-let edSnapTaken = false;
-['edText', 'edSize', 'edColor', 'edBold', 'edFont'].forEach(id => {
-  $(id).addEventListener('focus', () => { edSnapTaken = false; });
-  $(id).addEventListener('input', () => {
-    const o = edSel(); if (!o) return;
-    if (!edSnapTaken) { snapshot(); edSnapTaken = true; }
-    o.text = $('edText').value; o.size = +$('edSize').value || o.size; o.color = $('edColor').value; o.bold = $('edBold').checked; o.font = $('edFont').value;
-    drawOverlays();
-  });
+/* ---------- Text style: floating toolbar and sheets ---------- */
+function loadPrefs() {
+  const d = { lock: true, lineMode: false, recent: [] };
+  try { return Object.assign(d, JSON.parse(localStorage.getItem('dafdaf.prefs') || '{}')); } catch (_) { return d; }
+}
+function savePrefs() { try { localStorage.setItem('dafdaf.prefs', JSON.stringify(prefs)); } catch (_) {} }
+const prefs = loadPrefs();
+const defStyle = { font: 'heebo', size: 18, color: '#1a3fb0', bold: false, it: false, u: false, st: false, hl: '', align: '', lh: 1.2, ls: 0, op: 1, rot: 0 };
+const styleCopy = (src) => Object.fromEntries(Object.keys(defStyle).map(k => [k, src[k] ?? defStyle[k]]));
+const curStyle = () => edSel() || defStyle;
+let fmtOpen = false, styleBurst = false, burstTimer;
+/* One undo step per burst of changes (typing, dragging a slider) */
+function beginBurst() {
+  if (!styleBurst) { snapshot(); styleBurst = true; }
+  clearTimeout(burstTimer); burstTimer = setTimeout(() => { styleBurst = false; }, 900);
+}
+function applyStyle(patch) {
+  const o = edSel();
+  if (o) { beginBurst(); Object.assign(o, patch); } else Object.assign(defStyle, patch);
+  if (patch.font) {
+    prefs.recent = [patch.font, ...prefs.recent.filter(k => k !== patch.font)].slice(0, 4); savePrefs();
+    ensureFont(patch.font).then(() => { if (edActive()) drawOverlays(); });
+  }
+  drawOverlays();
+}
+const fontShort = (k) => (FONTS[k] || FONTS.heebo).label.replace(/\s*\(.*\)\s*$/, '');
+function syncFmtBar() {
+  const st = curStyle();
+  $('fbFontName').textContent = fontShort(st.font || 'heebo');
+  if (document.activeElement !== $('fbSize')) $('fbSize').value = Math.round((st.size || 18) * 10) / 10;
+  $('fbBold').setAttribute('aria-pressed', String(!!st.bold));
+  $('fbItalic').setAttribute('aria-pressed', String(!!st.it));
+  $('fbUnder').setAttribute('aria-pressed', String(!!st.u));
+  $('fbStrike').setAttribute('aria-pressed', String(!!st.st));
+  $('fbSwatch').style.background = st.color || '#000000';
+  $('fbSwatch').style.outline = st.hl ? `3px solid ${st.hl}` : '';
+  const o = edSel();
+  $('fbDelete').hidden = !o;
+  if (o) $('fbDelete').title = o.srcItem != null ? 'החזרת הטקסט המקורי' : 'מחיקת הטקסט';
+  $('styleToggle').setAttribute('aria-expanded', String(fmtOpen));
+  positionFmtBar();
+}
+/* Above the selected text (or below it when there is no room); docked at the top of the page area otherwise */
+function positionFmtBar() {
+  const bar = $('fmtBar');
+  const show = edActive() && ed.mode !== 'erase' && (!!ed.selId || fmtOpen);
+  bar.hidden = !show;
+  if (!show) return;
+  const view = $('editView').getBoundingClientRect(), body = $('edBody').getBoundingClientRect();
+  const bw = bar.offsetWidth, bh = bar.offsetHeight;
+  const minTop = body.top - view.top + 8, maxTop = body.bottom - view.top - bh - 8;
+  let top = minTop, left = (view.width - bw) / 2;
+  const el = ed.selId && $('stage').querySelector(`.ov[data-id="${ed.selId}"]`);
+  if (el) {
+    const r = el.getBoundingClientRect();
+    if (r.bottom > body.top && r.top < body.bottom) {
+      top = r.top - view.top - bh - 14;
+      if (top < minTop) top = r.bottom - view.top + 14;
+      if (top > maxTop) top = minTop;
+      left = r.left + r.width / 2 - view.left - bw / 2;
+    }
+  }
+  bar.style.top = Math.max(minTop, top) + 'px';
+  bar.style.left = Math.max(8, Math.min(view.width - bw - 8, left)) + 'px';
+}
+$('edBody').addEventListener('scroll', positionFmtBar, { passive: true });
+$('styleToggle').onclick = () => { fmtOpen = !fmtOpen; syncFmtBar(); };
+
+/* Text field: grows up to a few lines; Enter starts a new line */
+function growText() {
+  const t = $('edText');
+  t.rows = Math.min(4, Math.max(1, t.value.split('\n').length));
+}
+$('edText').addEventListener('input', () => {
+  growText();
+  const o = edSel(); if (!o) return;
+  beginBurst(); o.text = $('edText').value; drawOverlays();
 });
+
+/* Toolbar buttons */
+const sizeStep = (s) => s < 10 ? 0.5 : s < 30 ? 1 : 2;
+$('fbSizeDn').onclick = () => { const s = curStyle().size; applyStyle({ size: Math.max(4, Math.round((s - sizeStep(s - 0.01)) * 10) / 10) }); };
+$('fbSizeUp').onclick = () => { const s = curStyle().size; applyStyle({ size: Math.min(300, Math.round((s + sizeStep(s)) * 10) / 10) }); };
+$('fbSize').addEventListener('input', () => { const v = parseFloat($('fbSize').value); if (v >= 4 && v <= 300) applyStyle({ size: v }); });
+$('fbSize').addEventListener('change', () => syncFmtBar());
+$('fbBold').onclick = () => applyStyle({ bold: !curStyle().bold });
+$('fbItalic').onclick = () => applyStyle({ it: !curStyle().it });
+$('fbUnder').onclick = () => applyStyle({ u: !curStyle().u });
+$('fbStrike').onclick = () => applyStyle({ st: !curStyle().st });
+$('fbDelete').onclick = () => {
+  const p = edPage(); if (!p || !ed.selId) return;
+  snapshot(); removeOverlay(p, ed.selId); ed.selId = null; $('edText').value = ''; growText(); drawOverlays();
+};
+
+/* Font sheet: search, recent fonts, each name shown in its own font */
+let fontIO = null;
+function buildFontList(q) {
+  const cur = curStyle().font || 'heebo';
+  const norm = (x) => x.toLowerCase();
+  const match = (k) => !q || norm(FONTS[k].label + ' ' + FONTS[k].family).includes(norm(q));
+  let html = '';
+  const add = (title, keys) => {
+    if (!keys.length) return;
+    html += `<div class="fl-group">${title}</div>` + keys.map(k =>
+      `<button type="button" class="fl-row" data-font="${k}" aria-pressed="${k === cur}"><span>${FONTS[k].label}</span><span class="fl-sample">אבג 123</span></button>`).join('');
+  };
+  if (!q) add('אחרונים', prefs.recent.filter(k => FONTS[k]));
+  FONT_GROUPS.forEach((g, i) => add(g, Object.keys(FONTS).filter(k => FONTS[k].g === i && match(k))));
+  $('fontList').innerHTML = html || '<p class="hint">לא נמצא גופן בשם הזה.</p>';
+  // a font downloads only when its row scrolls into view
+  fontIO?.disconnect();
+  fontIO = new IntersectionObserver((entries) => entries.forEach(en => {
+    if (!en.isIntersecting) return;
+    const el = en.target, k = el.dataset.font;
+    el.style.fontFamily = fontStack(k); el.style.fontWeight = String(fontWeight(k, false));
+    fontIO.unobserve(el);
+  }), { root: $('fontList') });
+  $('fontList').querySelectorAll('.fl-row').forEach(el => fontIO.observe(el));
+}
+$('fbFont').onclick = () => { $('fontSearch').value = ''; openSheet('fontSheet'); buildFontList(''); $('fontList').scrollTop = 0; };
+$('fontSearch').addEventListener('input', () => buildFontList($('fontSearch').value.trim()));
+$('fontList').addEventListener('click', (e) => {
+  const b = e.target.closest('.fl-row'); if (!b) return;
+  applyStyle({ font: b.dataset.font });
+  $('fontSheet').close();
+});
+
+/* Colour sheet */
+const TEXT_COLORS = ['#000000', '#ffffff', '#374151', '#9ca3af', '#c0392b', '#e67e22', '#f1c40f', '#27ae60', '#0f6c72', '#1a3fb0', '#7c3aed', '#d81b60'];
+const HL_COLORS = ['', '#fff176', '#c5e1a5', '#b3e5fc', '#f8bbd0', '#ffe0b2', '#e0e0e0'];
+function buildSwatches(id, colors, prop, custom) {
+  const box = $(id), cur = curStyle()[prop] || '';
+  box.replaceChildren();
+  for (const col of colors) {
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = 'swb' + (col ? '' : ' none');
+    if (col) b.style.background = col;
+    b.setAttribute('aria-label', col || 'ללא מרקר');
+    b.setAttribute('aria-pressed', String(cur.toLowerCase() === col));
+    b.onclick = () => { applyStyle({ [prop]: col }); buildColorSheet(); };
+    box.appendChild(b);
+  }
+  if (custom) {
+    const wrap = document.createElement('label');
+    wrap.className = 'swb-custom'; wrap.title = 'צבע אחר';
+    const inp = document.createElement('input');
+    inp.type = 'color'; inp.value = /^#[0-9a-f]{6}$/i.test(cur) ? cur : '#000000'; inp.setAttribute('aria-label', 'צבע אחר');
+    inp.addEventListener('input', () => applyStyle({ [prop]: inp.value }));
+    wrap.appendChild(inp); box.appendChild(wrap);
+  }
+}
+function buildColorSheet() { buildSwatches('txtSwatches', TEXT_COLORS, 'color', true); buildSwatches('hlSwatches', HL_COLORS, 'hl', true); }
+$('fbColor').onclick = () => { openSheet('colorSheet'); buildColorSheet(); };
+
+/* Advanced sheet: alignment, spacing, transparency, rotation, line lock */
+function syncStyleSheet() {
+  const st = curStyle();
+  const al = st.align || (isHebrew(st.text || $('edText').value || 'א') ? 'r' : 'l');
+  $('alignSeg').querySelectorAll('[data-align]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.align === al)));
+  $('lhRange').value = st.lh ?? 1.2; $('lhVal').textContent = (+(st.lh ?? 1.2)).toFixed(2);
+  $('lsRange').value = st.ls ?? 0; $('lsVal').textContent = (+(st.ls ?? 0)).toFixed(2);
+  $('opRange').value = Math.round((st.op ?? 1) * 100); $('opVal').textContent = Math.round((st.op ?? 1) * 100) + '%';
+  $('rotRange').value = st.rot ?? 0; $('rotVal').textContent = (st.rot ?? 0) + '°';
+  $('lockLine').checked = prefs.lock;
+}
+$('fbMore').onclick = () => { openSheet('styleSheet'); syncStyleSheet(); };
+$('alignSeg').addEventListener('click', (e) => { const b = e.target.closest('[data-align]'); if (b) { applyStyle({ align: b.dataset.align }); syncStyleSheet(); } });
+$('lhRange').addEventListener('input', () => { applyStyle({ lh: +$('lhRange').value }); syncStyleSheet(); });
+$('lsRange').addEventListener('input', () => { applyStyle({ ls: +$('lsRange').value }); syncStyleSheet(); });
+$('opRange').addEventListener('input', () => { applyStyle({ op: +$('opRange').value / 100 }); syncStyleSheet(); });
+$('rotRange').addEventListener('input', () => { applyStyle({ rot: +$('rotRange').value }); syncStyleSheet(); });
+$('rotReset').onclick = () => { applyStyle({ rot: 0 }); syncStyleSheet(); };
+$('lockLine').addEventListener('change', () => { prefs.lock = $('lockLine').checked; savePrefs(); });
+
+/* Edit mode: word or whole line */
+$('lineMode').onclick = () => { prefs.lineMode = !prefs.lineMode; savePrefs(); $('lineMode').setAttribute('aria-pressed', String(prefs.lineMode)); };
+$('lineMode').setAttribute('aria-pressed', String(prefs.lineMode));
+
 document.querySelectorAll('#edModes .mode').forEach(b => b.addEventListener('click', () => setMode(b.dataset.mode)));
 document.addEventListener('keydown', (e) => {
   if (!edActive()) return;
@@ -1197,19 +1433,10 @@ document.addEventListener('keydown', (e) => {
   }
 });
 function leaveEditor() { cancelGestures(); hideGuide(); showView('pages'); renderGrid(); }
-$('styleToggle').onclick = () => {
-  const open = $('edStyle').classList.toggle('open');
-  $('styleToggle').setAttribute('aria-expanded', String(open));
-};
 $('edPrev').onclick = () => { const n = idxOf(ed.pid); if (n > 0) openEditor(state.pages[n - 1].id); };
 $('edNext').onclick = () => { const n = idxOf(ed.pid); if (n < state.pages.length - 1) openEditor(state.pages[n + 1].id); };
 window.addEventListener('resize', () => { if (edActive() && ed.pg) { clearTimeout(ed.rt); ed.rt = setTimeout(() => { computeFit(); layoutEditor(); scheduleRender(); }, 200); } });
 
-$('edFont').innerHTML = FONT_GROUPS.map((g, i) =>
-  `<optgroup label="${g}">` + Object.entries(FONTS).filter(([, f]) => f.g === i).map(([k, f]) => `<option value="${k}">${f.label}</option>`).join('') + '</optgroup>'
-).join('');
-$('edFont').value = 'heebo';
-$('edFont').addEventListener('change', () => ensureFont($('edFont').value).then(() => { if (edActive()) drawOverlays(); }));
 ensureFont('heebo').then(() => { if (state.pages.length) renderGrid(); });
 onSettings();
 renderGrid();

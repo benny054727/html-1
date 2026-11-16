@@ -7,7 +7,7 @@
 <meta name="referrer" content="no-referrer">
 <meta name="theme-color" content="#0f6c72">
 <title>דפדף – עורך PDF</title>
-<link rel="stylesheet" href="app.css?v=9">
+<link rel="stylesheet" href="app.css?v=10">
 </head>
 <body>
 
@@ -39,6 +39,7 @@
   <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/><path d="m9 12 2 2 4-4"/></symbol>
   <symbol id="i-minus" viewBox="0 0 24 24"><path d="M5 12h14"/></symbol>
   <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/></symbol>
+  <symbol id="i-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
   <symbol id="i-restart" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></symbol>
 </svg>
 
@@ -104,19 +105,30 @@
       </div>
       <div class="ed-tools" id="edTextTools">
         <div class="ed-row">
-          <input type="text" id="edText" value="" placeholder="כתבו טקסט ולחצו על העמוד" aria-label="טקסט">
-          <button class="iconbtn sm style-toggle" type="button" id="styleToggle" aria-expanded="false" aria-controls="edStyle" title="גופן, גודל וצבע"><span class="aa">Aa</span></button>
-        </div>
-        <div class="ed-row ed-style" id="edStyle">
-          <select id="edFont" aria-label="גופן"></select>
-          <input type="number" id="edSize" value="18" min="4" max="300" aria-label="גודל בנקודות" title="גודל (נק׳)">
-          <input type="color" id="edColor" value="#1a3fb0" aria-label="צבע">
-          <label class="chip"><input type="checkbox" id="edBold"><b>B</b></label>
-          <label class="chip" title="שומר את הטקסט על הקו של השורה ומצמיד טקסט חדש לשורות קרובות"><input type="checkbox" id="edLock" checked>יישור לשורה</label>
+          <textarea id="edText" rows="1" placeholder="כתבו טקסט ולחצו על העמוד" aria-label="טקסט"></textarea>
+          <button class="chip toggle" type="button" id="lineMode" aria-pressed="false" title="לחיצה על מילה בוחרת את כל השורה" hidden>שורה שלמה</button>
+          <button class="iconbtn sm style-toggle" type="button" id="styleToggle" aria-expanded="false" title="עיצוב הטקסט"><span class="aa">Aa</span></button>
         </div>
       </div>
       <p class="ed-hint" id="edHint"></p>
       <div class="ed-body" id="edBody" dir="ltr"><div class="stage" id="stage"></div></div>
+      <div class="fmtbar" id="fmtBar" role="toolbar" aria-label="עיצוב טקסט" hidden>
+        <button class="fb-font" type="button" id="fbFont" title="גופן"><span id="fbFontName">Heebo</span><svg class="i"><use href="#i-down"/></svg></button>
+        <div class="fb-size">
+          <button class="fb" type="button" id="fbSizeDn" aria-label="הקטנת הטקסט"><svg class="i"><use href="#i-minus"/></svg></button>
+          <input type="number" id="fbSize" inputmode="decimal" min="4" max="300" step="0.5" aria-label="גודל בנקודות">
+          <button class="fb" type="button" id="fbSizeUp" aria-label="הגדלת הטקסט"><svg class="i"><use href="#i-plus"/></svg></button>
+        </div>
+        <span class="fb-sep"></span>
+        <button class="fb" type="button" id="fbBold" aria-pressed="false" aria-label="הדגשה" title="הדגשה"><b>B</b></button>
+        <button class="fb" type="button" id="fbItalic" aria-pressed="false" aria-label="נטוי" title="נטוי"><i class="it">I</i></button>
+        <button class="fb" type="button" id="fbUnder" aria-pressed="false" aria-label="קו תחתון" title="קו תחתון"><u>U</u></button>
+        <button class="fb" type="button" id="fbStrike" aria-pressed="false" aria-label="קו חוצה" title="קו חוצה"><s>S</s></button>
+        <span class="fb-sep"></span>
+        <button class="fb" type="button" id="fbColor" aria-label="צבע ומרקר" title="צבע ומרקר"><span class="sw" id="fbSwatch"></span></button>
+        <button class="fb" type="button" id="fbMore" aria-label="עוד אפשרויות עיצוב" title="יישור, רווחים, שקיפות וסיבוב"><svg class="i"><use href="#i-sliders"/></svg></button>
+        <button class="fb danger" type="button" id="fbDelete" aria-label="מחיקת הטקסט" title="מחיקה" hidden><svg class="i"><use href="#i-trash"/></svg></button>
+      </div>
       <div class="strip-wrap">
         <button class="iconbtn sm" type="button" id="edPrev" aria-label="עמוד קודם"><svg class="i"><use href="#i-right"/></svg></button>
         <div class="strip" id="strip" aria-label="מעבר בין עמודים"></div>
@@ -226,11 +238,48 @@
   </div>
 </dialog>
 
+<dialog class="sheet-dlg tall" id="fontSheet" aria-labelledby="fontTitle">
+  <div class="sh-grab" aria-hidden="true"></div>
+  <div class="sh-head"><h2 id="fontTitle">גופן</h2><button class="iconbtn" type="button" data-close aria-label="סגירה"><svg class="i"><use href="#i-x"/></svg></button></div>
+  <div class="sh-search"><input type="search" id="fontSearch" placeholder="חיפוש גופן לפי שם" aria-label="חיפוש גופן"></div>
+  <div class="font-list" id="fontList"></div>
+</dialog>
+
+<dialog class="sheet-dlg" id="colorSheet" aria-labelledby="colorTitle">
+  <div class="sh-grab" aria-hidden="true"></div>
+  <div class="sh-head"><h2 id="colorTitle">צבע</h2><button class="iconbtn" type="button" data-close aria-label="סגירה"><svg class="i"><use href="#i-x"/></svg></button></div>
+  <div class="sh-body">
+    <div class="field"><span class="lbl">צבע הטקסט</span><div class="swatches" id="txtSwatches"></div></div>
+    <div class="field"><span class="lbl">מרקר (צבע מאחורי הטקסט)</span><div class="swatches" id="hlSwatches"></div></div>
+  </div>
+</dialog>
+
+<dialog class="sheet-dlg" id="styleSheet" aria-labelledby="styleTitle">
+  <div class="sh-grab" aria-hidden="true"></div>
+  <div class="sh-head"><h2 id="styleTitle">עיצוב מתקדם</h2><button class="iconbtn" type="button" data-close aria-label="סגירה"><svg class="i"><use href="#i-x"/></svg></button></div>
+  <div class="sh-body">
+    <div class="field"><span class="lbl">יישור (כשיש כמה שורות)</span>
+      <div class="seg wide" id="alignSeg" role="group" aria-label="יישור">
+        <button class="mode" type="button" data-align="r" aria-pressed="false">ימין</button>
+        <button class="mode" type="button" data-align="c" aria-pressed="false">מרכז</button>
+        <button class="mode" type="button" data-align="l" aria-pressed="false">שמאל</button>
+      </div>
+    </div>
+    <div class="field"><label for="lhRange">רווח בין שורות: <b id="lhVal">1.2</b></label><input type="range" id="lhRange" min="0.8" max="3" step="0.05" value="1.2"></div>
+    <div class="field"><label for="lsRange">רווח בין אותיות: <b id="lsVal">0</b></label><input type="range" id="lsRange" min="-0.1" max="0.6" step="0.01" value="0"></div>
+    <div class="field"><label for="opRange">שקיפות: <b id="opVal">100%</b></label><input type="range" id="opRange" min="10" max="100" step="1" value="100"></div>
+    <div class="field"><label for="rotRange">סיבוב: <b id="rotVal">0°</b></label>
+      <div class="row nowrap"><input type="range" id="rotRange" min="-180" max="180" step="1" value="0"><button class="btn" type="button" id="rotReset">איפוס</button></div>
+    </div>
+    <label class="switch"><input type="checkbox" id="lockLine" checked><span>יישור לשורה: הטקסט נשאר על קו השורה ונצמד לשורות קרובות</span></label>
+  </div>
+</dialog>
+
 <div id="toast" role="status" hidden></div>
 <div class="busy" id="busy" hidden><div id="busyText">מכין את הקובץ…</div></div>
 
 <script src="vendor/pdf.min.js"></script>
 <script src="vendor/pdf-lib.min.js"></script>
-<script src="app.js?v=9"></script>
+<script src="app.js?v=10"></script>
 </body>
 </html>
