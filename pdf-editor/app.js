@@ -104,13 +104,32 @@ function pageNumberText(fmt, n, t) {
   return String(n);
 }
 
+/* Where an overlay's centre sits on the display. Replaced text is anchored at its start edge. */
+function overlayCenter(o, vp, R) {
+  const [x, y] = vp.convertToViewportPoint(o.px, o.py);
+  if (!o.anchor || o.anchor === 'c') return [x, y];
+  const img = textImage(o.text || ' ', o.size, o.color, o.bold);
+  const a = (o.ang - R) * Math.PI / 180;
+  const half = (img.w / 2 - o.size * 0.1) * vp.scale * (o.anchor === 'l' ? 1 : -1);
+  return [x + half * Math.cos(a), y - half * Math.sin(a)];
+}
+/* Areas covered with a solid colour (erased) */
+function drawRects(ctx, p, vp) {
+  for (const r of p.rects || []) {
+    const [a, b, c, d] = vp.convertToViewportRectangle([r.x1, r.y1, r.x2, r.y2]);
+    ctx.fillStyle = r.color;
+    ctx.fillRect(Math.min(a, c), Math.min(b, d), Math.abs(c - a), Math.abs(d - b));
+  }
+}
+const hexRgb = (hex) => { const n = parseInt(hex.slice(1), 16); return rgb((n >> 16 & 255) / 255, (n >> 8 & 255) / 255, (n & 255) / 255); };
+
 /* All stamps for a page, in display coordinates of viewport vp.
    Each: {img, cx, cy, a (visual degrees, counter-clockwise), op} */
 function stampList(p, pg, vp, n, total, set) {
   const s = vp.scale, R = totalRot(pg, p), out = [];
   for (const o of p.overlays) {
     if (!o.text.trim()) continue;
-    const [cx, cy] = vp.convertToViewportPoint(o.px, o.py);
+    const [cx, cy] = overlayCenter(o, vp, R);
     out.push({ img: textImage(o.text, o.size, o.color, o.bold), cx, cy, a: o.ang - R, op: 1 });
   }
   if (set.wm.on && set.wm.text.trim()) {
@@ -173,7 +192,7 @@ async function addBytes(bytes, name) {
   }).promise;
   const src = state.sources.length;
   state.sources.push({ name, bytes, pdf, cache: new Map() });
-  for (let i = 0; i < pdf.numPages; i++) state.pages.push({ id: uid++, src, idx: i, rot: 0, overlays: [] });
+  for (let i = 0; i < pdf.numPages; i++) state.pages.push({ id: uid++, src, idx: i, rot: 0, overlays: [], rects: [] });
   if ($('fileName').dataset.auto !== 'no') {
     const merged = new Set(state.pages.map(p => p.src)).size > 1;
     if (!merged || !s0) $('fileName').value = name.replace(/\.pdf$/i, '') + (merged ? '-ממוזג' : '-ערוך') + '.pdf';
@@ -265,7 +284,7 @@ async function fillThumb(card, p, n, total, set, seq) {
   const R = totalRot(pg, p);
   const base = pg.getViewport({ scale: 1, rotation: R });
   card.querySelector('.size').textContent = paperName(base.width, base.height);
-  const key = JSON.stringify([R, p.overlays, set.wm, set.pn.on ? [set.pn, n, total] : 0]);
+  const key = JSON.stringify([R, p.overlays, p.rects || [], set.wm, set.pn.on ? [set.pn, n, total] : 0]);
   const cached = thumbCache.get(p.id);
   let canvas;
   if (cached && cached.key === key) canvas = cached.canvas;
@@ -279,6 +298,7 @@ async function fillThumb(card, p, n, total, set, seq) {
     const ctx = canvas.getContext('2d');
     ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, canvas.width, canvas.height);
     try { await pg.render({ canvasContext: ctx, viewport: vp }).promise; } catch (e) { console.warn(e); }
+    drawRects(ctx, p, vp);
     drawStamps(ctx, stampList(p, pg, vp, n, total, set), scale);
     thumbCache.set(p.id, { key, canvas });
   }
@@ -291,7 +311,9 @@ async function fillThumb(card, p, n, total, set, seq) {
 /* ---------- Page actions ---------- */
 const idxOf = (id) => state.pages.findIndex(p => p.id === id);
 function cloneWithNewIds(p) {
-  return { ...p, id: uid++, overlays: p.overlays.map(o => ({ ...o, id: uid++ })) };
+  const map = new Map();
+  const rects = (p.rects || []).map(r => { const id = uid++; map.set(r.id, id); return { ...r, id }; });
+  return { ...p, id: uid++, rects, overlays: p.overlays.map(o => ({ ...o, id: uid++, rectId: o.rectId ? map.get(o.rectId) : undefined })) };
 }
 function rotate(ids, delta) {
   snapshot();
@@ -443,6 +465,9 @@ async function buildPdf(pages) {
     const R = totalRot(pg, p);
     page.setRotation(degrees(R));
     const vp = pg.getViewport({ scale: 1, rotation: R });
+    for (const r of p.rects || []) {
+      page.drawRectangle({ x: r.x1, y: r.y1, width: r.x2 - r.x1, height: r.y2 - r.y1, color: hexRgb(r.color), borderWidth: 0 });
+    }
     for (const st of stampList(p, pg, vp, n, pages.length, set)) {
       let img = embedded.get(st.img.key);
       if (!img) { img = await out.embedPng(st.img.canvas.toDataURL('image/png')); embedded.set(st.img.key, img); }
@@ -485,84 +510,203 @@ $('extractBtn').onclick = () => {
   if (pages.length) exportPages(pages, outName('-עמודים-נבחרים'));
 };
 
-/* ---------- Text editor ---------- */
-const ed = { pid: null, selId: null, vp: null, R: 0, scale: 1, drag: null };
+/* ---------- Page editor: new text, edit existing text, erase area ---------- */
+const ed = { pid: null, selId: null, selRect: null, vp: null, R: 0, scale: 1, dpr: 1, canvas: null, drag: null, draw: null, mode: 'text', items: [] };
 const edPage = () => state.pages.find(p => p.id === ed.pid);
 const edSel = () => edPage()?.overlays.find(o => o.id === ed.selId);
+const HINTS = {
+  text: 'כתבו טקסט בשדה למעלה ולחצו על העמוד כדי להוסיף אותו. גוררים טקסט כדי להזיז אותו.',
+  edit: 'לחצו על טקסט מסומן בעמוד כדי לשנות אותו. כדי למחוק מילה, מוחקים את כל הטקסט בשדה. ✕ מחזיר את המקור.',
+  erase: 'גררו מלבן על האזור שרוצים למחוק. הכיסוי מקבל את צבע הרקע של הדף.',
+};
 
 async function openEditor(id) {
-  ed.pid = id; ed.selId = null;
+  ed.pid = id; ed.selId = null; ed.selRect = null;
   if (!$('editor').open) $('editor').showModal();
   await drawEditor();
+}
+function setMode(m) {
+  ed.mode = m; ed.selId = null; ed.selRect = null;
+  document.querySelectorAll('#edModes .mode').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.mode === m)));
+  $('stage').dataset.mode = m;
+  $('edTextTools').classList.toggle('off', m === 'erase');
+  drawOverlays();
 }
 async function drawEditor() {
   const p = edPage(); if (!p) return;
   const n = idxOf(p.id);
-  $('edTitle').textContent = `הוספת טקסט · עמוד ${n + 1} מתוך ${state.pages.length}`;
+  $('edTitle').textContent = `עריכת עמוד ${n + 1} מתוך ${state.pages.length}`;
   $('edPrev').disabled = n <= 0; $('edNext').disabled = n >= state.pages.length - 1;
   const pg = await getPage(p.src, p.idx);
   const R = totalRot(pg, p);
   const base = pg.getViewport({ scale: 1, rotation: R });
   const availW = Math.min(900, window.innerWidth - 80);
-  const availH = Math.max(320, window.innerHeight - 260);
+  const availH = Math.max(320, window.innerHeight - 300);
   const scale = Math.min(availW / base.width, availH / base.height, 2.5);
   const vp = pg.getViewport({ scale, rotation: R });
-  ed.vp = vp; ed.R = R; ed.scale = scale;
   const dpr = Math.min(2, window.devicePixelRatio || 1);
   const hi = pg.getViewport({ scale: scale * dpr, rotation: R });
   const canvas = document.createElement('canvas');
   canvas.width = Math.ceil(hi.width); canvas.height = Math.ceil(hi.height);
   canvas.style.width = vp.width + 'px'; canvas.style.height = vp.height + 'px';
-  const ctx = canvas.getContext('2d');
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
   ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, canvas.width, canvas.height);
   await pg.render({ canvasContext: ctx, viewport: hi }).promise;
+  // The page's own text, so it can be clicked and replaced
+  let items = [];
+  try {
+    const tc = await pg.getTextContent();
+    items = tc.items.map((it, i) => ({ ...it, i })).filter(it =>
+      it.str && it.str.trim() && Math.abs(it.transform[1]) < 0.01 && Math.abs(it.transform[2]) < 0.01 && it.transform[0] > 0 && it.width > 0);
+  } catch (e) { console.warn(e); }
   if (ed.pid !== p.id) return;
+  Object.assign(ed, { vp, R, scale, dpr, canvas, items });
   const stage = $('stage');
   stage.style.width = vp.width + 'px'; stage.style.height = vp.height + 'px';
   stage.replaceChildren(canvas);
   drawOverlays();
 }
+
+/* Bounding box of a text item, in PDF user space */
+function itemBox(it) {
+  const h = Math.hypot(it.transform[2], it.transform[3]) || it.height;
+  const x = it.transform[4], y = it.transform[5];
+  return { x1: x - h * 0.05, y1: y - h * 0.28, x2: x + it.width + h * 0.05, y2: y + h * 0.95, h };
+}
+function toView(r) {
+  const [a, b, c, d] = ed.vp.convertToViewportRectangle([r.x1, r.y1, r.x2, r.y2]);
+  return { left: Math.min(a, c), top: Math.min(b, d), width: Math.abs(c - a), height: Math.abs(d - b) };
+}
+/* Background colour next to an area of the rendered page (the lightest of the points around it) */
+function sampleBg(v) {
+  const ctx = ed.canvas.getContext('2d', { willReadFrequently: true });
+  const k = ed.dpr, pts = [];
+  const xs = [v.left - 3, v.left + v.width / 2, v.left + v.width + 3], ys = [v.top - 3, v.top + v.height / 2, v.top + v.height + 3];
+  for (const x of xs) for (const y of ys) {
+    if (x === xs[1] && y === ys[1]) continue;
+    const px = Math.round(x * k), py = Math.round(y * k);
+    if (px < 0 || py < 0 || px >= ed.canvas.width || py >= ed.canvas.height) continue;
+    pts.push(ctx.getImageData(px, py, 1, 1).data);
+  }
+  if (!pts.length) return '#ffffff';
+  pts.sort((a, b) => (b[0] + b[1] + b[2]) - (a[0] + a[1] + a[2]));
+  const c = pts[0];
+  return '#' + [c[0], c[1], c[2]].map(n => n.toString(16).padStart(2, '0')).join('');
+}
+function textColorInside(v) {
+  // darkest pixel inside the box = the original ink colour
+  const ctx = ed.canvas.getContext('2d', { willReadFrequently: true });
+  const k = ed.dpr;
+  const x = Math.max(0, Math.round(v.left * k)), y = Math.max(0, Math.round(v.top * k));
+  const w = Math.max(1, Math.min(ed.canvas.width - x, Math.round(v.width * k))), h = Math.max(1, Math.min(ed.canvas.height - y, Math.round(v.height * k)));
+  const d = ctx.getImageData(x, y, w, h).data;
+  let best = 765, col = [0, 0, 0];
+  for (let i = 0; i < d.length; i += 16) { const s = d[i] + d[i + 1] + d[i + 2]; if (s < best) { best = s; col = [d[i], d[i + 1], d[i + 2]]; } }
+  return '#' + col.map(n => n.toString(16).padStart(2, '0')).join('');
+}
+
+function positionOv(el, o) {
+  const [cx, cy] = overlayCenter(o, ed.vp, ed.R);
+  el.style.left = cx + 'px'; el.style.top = cy + 'px';
+}
 function drawOverlays() {
-  const stage = $('stage'), p = edPage(); if (!p) return;
-  stage.querySelectorAll('.ov').forEach(el => el.remove());
+  const stage = $('stage'), p = edPage(); if (!p || !ed.vp) return;
+  stage.querySelectorAll('.ov, .er, .ti').forEach(el => el.remove());
+  const rects = p.rects || [];
+  for (const r of rects) {
+    const v = toView(r);
+    const el = document.createElement('div');
+    el.className = 'er' + (r.id === ed.selRect ? ' sel' : '');
+    el.dataset.id = r.id;
+    Object.assign(el.style, { left: v.left + 'px', top: v.top + 'px', width: v.width + 'px', height: v.height + 'px', background: r.color });
+    if (!r.link) el.appendChild(xButton('ביטול המחיקה'));
+    stage.appendChild(el);
+  }
+  if (ed.mode === 'edit') {
+    const used = new Set(p.overlays.filter(o => o.srcItem != null).map(o => o.srcItem));
+    for (const it of ed.items) {
+      if (used.has(it.i)) continue;
+      const v = toView(itemBox(it));
+      const el = document.createElement('div');
+      el.className = 'ti'; el.dataset.i = it.i; el.title = it.str;
+      Object.assign(el.style, { left: v.left + 'px', top: v.top + 'px', width: v.width + 'px', height: v.height + 'px' });
+      stage.appendChild(el);
+    }
+  }
   for (const o of p.overlays) {
-    const [x, y] = ed.vp.convertToViewportPoint(o.px, o.py);
     const el = document.createElement('div');
     el.className = 'ov' + (o.id === ed.selId ? ' sel' : '');
     el.dataset.id = o.id;
     el.dir = isHebrew(o.text) ? 'rtl' : 'ltr';
-    el.style.left = x + 'px'; el.style.top = y + 'px';
+    positionOv(el, o);
     el.style.transform = `translate(-50%, -50%) rotate(${-(o.ang - ed.R)}deg)`;
     el.style.fontSize = (o.size * ed.scale) + 'px';
     el.style.fontWeight = o.bold ? 700 : 400;
     el.style.color = o.color;
     el.textContent = o.text || ' ';
-    const x_ = document.createElement('button');
-    x_.className = 'x'; x_.type = 'button'; x_.textContent = '✕'; x_.setAttribute('aria-label', 'מחיקת הטקסט');
-    el.appendChild(x_);
+    if (!o.text) el.classList.add('empty');
+    el.appendChild(xButton(o.srcItem != null ? 'החזרת הטקסט המקורי' : 'מחיקת הטקסט'));
     stage.appendChild(el);
   }
   $('edHint').textContent = ed.selId
-    ? 'הטקסט המסומן מתעדכן לפי השדות למעלה. גררו כדי להזיז, ✕ למחיקה. לחיצה על אזור ריק מבטלת את הסימון.'
-    : 'לחצו על העמוד כדי להוסיף את הטקסט. גוררים טקסט כדי להזיז אותו. לחיצה על טקסט קיים מאפשרת לשנות אותו.';
+    ? 'הטקסט המסומן מתעדכן לפי השדות למעלה. גררו כדי להזיז. ✕ מבטל אותו. לחיצה על אזור ריק מבטלת את הסימון.'
+    : HINTS[ed.mode];
+  if (ed.mode === 'edit' && !ed.items.length) $('edHint').textContent = 'לא נמצא בעמוד הזה טקסט שאפשר לערוך (ייתכן שזה מסמך סרוק). אפשר למחוק אזור ולכתוב מעליו טקסט חדש.';
+}
+function xButton(label) {
+  const b = document.createElement('button');
+  b.className = 'x'; b.type = 'button'; b.textContent = '✕'; b.setAttribute('aria-label', label);
+  return b;
 }
 function stagePoint(e) {
   const r = $('stage').getBoundingClientRect();
-  return [e.clientX - r.left, e.clientY - r.top];
+  return [Math.max(0, Math.min(ed.vp.width, e.clientX - r.left)), Math.max(0, Math.min(ed.vp.height, e.clientY - r.top))];
 }
+function loadFields(o) {
+  $('edText').value = o.text; $('edSize').value = Math.round(o.size * 10) / 10; $('edColor').value = o.color; $('edBold').checked = o.bold;
+}
+function removeOverlay(p, id) {
+  const o = p.overlays.find(x => x.id === id);
+  p.overlays = p.overlays.filter(x => x.id !== id);
+  if (o && o.rectId) p.rects = (p.rects || []).filter(r => r.id !== o.rectId);
+}
+
+function replaceItem(p, it) {
+  snapshot();
+  const box = itemBox(it);
+  const v = toView(box);
+  const rect = { id: uid++, x1: box.x1, y1: box.y1, x2: box.x2, y2: box.y2, color: sampleBg(v), link: true };
+  p.rects = p.rects || [];
+  p.rects.push(rect);
+  const rtl = isHebrew(it.str) || it.dir === 'rtl';
+  const midY = it.transform[5] + box.h * 0.33;
+  const o = {
+    id: uid++, text: it.str, size: Math.round(box.h * 10) / 10, color: textColorInside(v), bold: /bold|black|heavy/i.test(it.fontName || ''),
+    px: rtl ? it.transform[4] + it.width : it.transform[4], py: midY, ang: 0, anchor: rtl ? 'r' : 'l',
+    srcItem: it.i, rectId: rect.id,
+  };
+  p.overlays.push(o);
+  ed.selId = o.id; ed.selRect = null;
+  loadFields(o);
+  drawOverlays();
+  $('edText').focus(); $('edText').select();
+}
+
 $('stage').addEventListener('pointerdown', (e) => {
-  const p = edPage(); if (!p) return;
-  if (e.target.classList.contains('x')) {
+  const p = edPage(); if (!p || !ed.vp) return;
+  const xb = e.target.closest('.x');
+  if (xb) {
     snapshot();
-    const id = +e.target.parentElement.dataset.id;
-    p.overlays = p.overlays.filter(o => o.id !== id);
-    ed.selId = null; drawOverlays(); return;
+    const host = xb.parentElement;
+    if (host.classList.contains('ov')) removeOverlay(p, +host.dataset.id);
+    else p.rects = (p.rects || []).filter(r => r.id !== +host.dataset.id);
+    ed.selId = null; ed.selRect = null; drawOverlays(); return;
   }
   const ovEl = e.target.closest('.ov');
   if (ovEl) {
     const o = p.overlays.find(x => x.id === +ovEl.dataset.id);
-    ed.selId = o.id;
-    $('edText').value = o.text; $('edSize').value = o.size; $('edColor').value = o.color; $('edBold').checked = o.bold;
+    ed.selId = o.id; ed.selRect = null;
+    loadFields(o);
     const [x, y] = ed.vp.convertToViewportPoint(o.px, o.py);
     const [mx, my] = stagePoint(e);
     ed.drag = { o, dx: mx - x, dy: my - y, moved: false };
@@ -570,7 +714,28 @@ $('stage').addEventListener('pointerdown', (e) => {
     drawOverlays();
     return;
   }
-  if (ed.selId) { ed.selId = null; drawOverlays(); return; }
+  const erEl = e.target.closest('.er');
+  if (erEl && !e.target.closest('.ti')) {
+    const r = (p.rects || []).find(x => x.id === +erEl.dataset.id);
+    if (r && !r.link) { ed.selRect = r.id; ed.selId = null; drawOverlays(); return; }
+  }
+  const tiEl = e.target.closest('.ti');
+  if (tiEl && ed.mode === 'edit') {
+    const it = ed.items.find(x => x.i === +tiEl.dataset.i);
+    if (it) replaceItem(p, it);
+    return;
+  }
+  if (ed.selId || ed.selRect) { ed.selId = null; ed.selRect = null; drawOverlays(); if (ed.mode !== 'erase') return; }
+  if (ed.mode === 'erase') {
+    const [x, y] = stagePoint(e);
+    const el = document.createElement('div');
+    el.className = 'er drawing';
+    $('stage').appendChild(el);
+    ed.draw = { x0: x, y0: y, el, x, y };
+    $('stage').setPointerCapture(e.pointerId);
+    return;
+  }
+  if (ed.mode === 'edit') return;
   const text = $('edText').value;
   if (!text.trim()) { toast('כתבו קודם טקסט בשדה למעלה'); $('edText').focus(); return; }
   snapshot();
@@ -582,18 +747,40 @@ $('stage').addEventListener('pointerdown', (e) => {
   drawOverlays();
 });
 $('stage').addEventListener('pointermove', (e) => {
+  if (ed.draw) {
+    const [x, y] = stagePoint(e);
+    Object.assign(ed.draw, { x, y });
+    const d = ed.draw;
+    Object.assign(d.el.style, { left: Math.min(d.x0, x) + 'px', top: Math.min(d.y0, y) + 'px', width: Math.abs(x - d.x0) + 'px', height: Math.abs(y - d.y0) + 'px' });
+    return;
+  }
   if (!ed.drag) return;
   if (!ed.drag.moved) { snapshot(); ed.drag.moved = true; }
   const [mx, my] = stagePoint(e);
-  const x = Math.max(0, Math.min(ed.vp.width, mx - ed.drag.dx));
-  const y = Math.max(0, Math.min(ed.vp.height, my - ed.drag.dy));
-  [ed.drag.o.px, ed.drag.o.py] = ed.vp.convertToPdfPoint(x, y);
+  [ed.drag.o.px, ed.drag.o.py] = ed.vp.convertToPdfPoint(mx - ed.drag.dx, my - ed.drag.dy);
   const el = $('stage').querySelector(`.ov[data-id="${ed.drag.o.id}"]`);
-  if (el) { el.style.left = x + 'px'; el.style.top = y + 'px'; }
+  if (el) positionOv(el, ed.drag.o);
 });
-const endDrag = () => { ed.drag = null; };
-$('stage').addEventListener('pointerup', endDrag);
-$('stage').addEventListener('pointercancel', endDrag);
+function endPointer() {
+  ed.drag = null;
+  const d = ed.draw; if (!d) return;
+  ed.draw = null;
+  d.el.remove();
+  const w = Math.abs(d.x - d.x0), h = Math.abs(d.y - d.y0);
+  if (w < 4 || h < 4) return;
+  const p = edPage();
+  const v = { left: Math.min(d.x0, d.x), top: Math.min(d.y0, d.y), width: w, height: h };
+  const [ax, ay] = ed.vp.convertToPdfPoint(v.left, v.top);
+  const [bx, by] = ed.vp.convertToPdfPoint(v.left + w, v.top + h);
+  snapshot();
+  p.rects = p.rects || [];
+  const r = { id: uid++, x1: Math.min(ax, bx), y1: Math.min(ay, by), x2: Math.max(ax, bx), y2: Math.max(ay, by), color: sampleBg(v) };
+  p.rects.push(r);
+  ed.selRect = r.id;
+  drawOverlays();
+}
+$('stage').addEventListener('pointerup', endPointer);
+$('stage').addEventListener('pointercancel', endPointer);
 
 let edSnapTaken = false;
 ['edText', 'edSize', 'edColor', 'edBold'].forEach(id => {
@@ -605,11 +792,14 @@ let edSnapTaken = false;
     drawOverlays();
   });
 });
+document.querySelectorAll('#edModes .mode').forEach(b => b.addEventListener('click', () => setMode(b.dataset.mode)));
 $('editor').addEventListener('keydown', (e) => {
   const typing = /^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement?.tagName);
-  if ((e.key === 'Delete' || e.key === 'Backspace') && !typing && ed.selId) {
+  if ((e.key === 'Delete' || e.key === 'Backspace') && !typing && (ed.selId || ed.selRect)) {
     e.preventDefault(); snapshot();
-    const p = edPage(); p.overlays = p.overlays.filter(o => o.id !== ed.selId); ed.selId = null; drawOverlays();
+    const p = edPage();
+    if (ed.selId) removeOverlay(p, ed.selId); else p.rects = (p.rects || []).filter(r => r.id !== ed.selRect);
+    ed.selId = null; ed.selRect = null; drawOverlays();
   }
 });
 $('edClose').onclick = () => $('editor').close();

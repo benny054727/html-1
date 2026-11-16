@@ -173,6 +173,18 @@ dialog#editor::backdrop { background: rgba(10, 16, 22, .55); }
 .ed-tools .field { flex: 0 1 auto; }
 .ed-tools .field.grow { flex: 1 1 220px; }
 .ed-tools input[type=number] { width: 76px; }
+.ed-tools.off { opacity: .4; pointer-events: none; }
+.ed-modes { display: flex; gap: 6px; flex-wrap: wrap; padding: 12px 16px 0; }
+.mode { border: 1px solid var(--line); background: var(--surface); border-radius: 999px; padding: 6px 14px; font-weight: 500; }
+.mode[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.stage[data-mode="edit"] { cursor: default; }
+.ti { position: absolute; background: rgba(255, 196, 0, .18); outline: 1px solid rgba(214, 150, 0, .55); cursor: text; border-radius: 1px; }
+.ti:hover { background: rgba(255, 196, 0, .4); }
+.er { position: absolute; }
+.er.drawing { outline: 2px dashed var(--danger); background: rgba(255, 255, 255, .6); }
+.er.sel { outline: 2px dashed var(--danger); }
+.er.sel .x { display: block; }
+.ov.empty { min-width: 14px; min-height: 1em; outline: 1px dashed rgba(179, 38, 30, .6); }
 .ed-body { background: var(--desk); padding: 16px; overflow: auto; max-height: calc(100vh - 220px); display: grid; place-items: center; }
 .stage { position: relative; box-shadow: var(--sheet-shadow); background: #fff; touch-action: none; cursor: crosshair; }
 .stage canvas { display: block; }
@@ -182,7 +194,7 @@ dialog#editor::backdrop { background: rgba(10, 16, 22, .55); }
 }
 .ov:hover { outline-color: rgba(15, 108, 114, .6); }
 .ov.sel { outline: 2px solid var(--accent); }
-.ov .x {
+.ov .x, .er .x {
   position: absolute; top: -12px; left: -12px; width: 22px; height: 22px; border-radius: 50%; border: 0;
   background: var(--danger); color: #fff; font: 700 13px/22px var(--font-ui); padding: 0; display: none;
 }

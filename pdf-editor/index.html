@@ -94,7 +94,7 @@
 
         <div class="group">
           <div class="field"><label for="fileName">שם הקובץ להורדה</label><input type="text" id="fileName" value="מסמך.pdf"></div>
-          <p class="hint">טיפ: לחיצה על עמוד בוחרת אותו. ✎ פותח עריכת טקסט. גוררים עמוד כדי לשנות סדר. אפשר לגרור עוד קבצים לכל מקום בדף.</p>
+          <p class="hint">טיפ: לחיצה על עמוד בוחרת אותו. ✎ פותח את עריכת העמוד: הוספת טקסט, שינוי טקסט קיים ומחיקת אזורים. גוררים עמוד כדי לשנות סדר. אפשר לגרור עוד קבצים לכל מקום בדף.</p>
         </div>
       </aside>
     </div>
@@ -103,10 +103,15 @@
 
 <dialog id="editor" aria-labelledby="edTitle">
   <div class="ed-head">
-    <h3 id="edTitle">הוספת טקסט</h3>
+    <h3 id="edTitle">עריכת עמוד</h3>
     <button class="btn" id="edClose">סיום</button>
   </div>
-  <div class="ed-tools">
+  <div class="ed-modes" id="edModes" role="group" aria-label="סוג עריכה">
+    <button class="mode" type="button" data-mode="text" aria-pressed="true">✎ הוספת טקסט</button>
+    <button class="mode" type="button" data-mode="edit" aria-pressed="false">✐ שינוי טקסט קיים</button>
+    <button class="mode" type="button" data-mode="erase" aria-pressed="false">⌫ מחיקת אזור</button>
+  </div>
+  <div class="ed-tools" id="edTextTools">
     <div class="field grow"><label for="edText">טקסט</label><input type="text" id="edText" value="" placeholder="כתבו כאן טקסט ואז לחצו על העמוד"></div>
     <div class="field"><label for="edSize">גודל (נק׳)</label><input type="number" id="edSize" value="18" min="4" max="300"></div>
     <div class="field"><label for="edColor">צבע</label><input type="color" id="edColor" value="#1a3fb0"></div>
@@ -114,7 +119,7 @@
   </div>
   <div class="ed-body"><div class="stage" id="stage"></div></div>
   <div class="ed-foot">
-    <p class="hint" id="edHint">לחצו על העמוד כדי להוסיף את הטקסט. גוררים טקסט כדי להזיז אותו. לחיצה על טקסט קיים מאפשרת לשנות אותו.</p>
+    <p class="hint" id="edHint">כתבו טקסט בשדה למעלה ולחצו על העמוד כדי להוסיף אותו.</p>
     <div class="row"><button class="btn" id="edPrev">→ עמוד קודם</button><button class="btn" id="edNext">עמוד הבא ←</button></div>
   </div>
 </dialog>
