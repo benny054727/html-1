@@ -107,9 +107,15 @@
     <button class="btn" id="edClose">סיום</button>
   </div>
   <div class="ed-modes" id="edModes" role="group" aria-label="סוג עריכה">
-    <button class="mode" type="button" data-mode="text" aria-pressed="true">✎ הוספת טקסט</button>
-    <button class="mode" type="button" data-mode="edit" aria-pressed="false">✐ שינוי טקסט קיים</button>
-    <button class="mode" type="button" data-mode="erase" aria-pressed="false">⌫ מחיקת אזור</button>
+    <button class="mode" type="button" data-mode="text" aria-pressed="true">✎ <span class="lg">הוספת טקסט</span><span class="sm">הוספה</span></button>
+    <button class="mode" type="button" data-mode="edit" aria-pressed="false">✐ <span class="lg">שינוי טקסט קיים</span><span class="sm">שינוי</span></button>
+    <button class="mode" type="button" data-mode="erase" aria-pressed="false">⌫ <span class="lg">מחיקת אזור</span><span class="sm">מחיקה</span></button>
+    <div class="zoom" role="group" aria-label="זום">
+      <button class="zbtn" type="button" id="zoomOut" aria-label="הקטנה">−</button>
+      <span class="zlabel" id="zoomLabel" aria-live="polite">100%</span>
+      <button class="zbtn" type="button" id="zoomIn" aria-label="הגדלה">+</button>
+      <button class="zbtn fit" type="button" id="zoomFit">התאמה למסך</button>
+    </div>
   </div>
   <div class="ed-tools" id="edTextTools">
     <div class="field grow"><label for="edText">טקסט</label><input type="text" id="edText" value="" placeholder="כתבו כאן טקסט ואז לחצו על העמוד"></div>
@@ -117,7 +123,7 @@
     <div class="field"><label for="edColor">צבע</label><input type="color" id="edColor" value="#1a3fb0"></div>
     <label class="switch pb"><input type="checkbox" id="edBold"> מודגש</label>
   </div>
-  <div class="ed-body"><div class="stage" id="stage"></div></div>
+  <div class="ed-body" id="edBody" dir="ltr"><div class="stage" id="stage"></div></div>
   <div class="ed-foot">
     <p class="hint" id="edHint">כתבו טקסט בשדה למעלה ולחצו על העמוד כדי להוסיף אותו.</p>
     <div class="row"><button class="btn" id="edPrev">→ עמוד קודם</button><button class="btn" id="edNext">עמוד הבא ←</button></div>
