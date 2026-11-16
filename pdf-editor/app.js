@@ -763,7 +763,7 @@ const edPage = () => state.pages.find(p => p.id === ed.pid);
 const edSel = () => edPage()?.overlays.find(o => o.id === ed.selId);
 const HINTS = {
   text: 'כתבו טקסט בשדה למעלה ולחצו על העמוד כדי להוסיף אותו. גוררים טקסט כדי להזיז אותו.',
-  edit: 'לחצו על מילה מסומנת כדי לשנות אותה, או הפעילו "שורה שלמה" כדי לשנות את כל השורה. סל האשפה בסרגל מחזיר את המקור.',
+  edit: 'בחרו אם הקשה בוחרת אות, מילה או שורה, ולחצו על הטקסט כדי לשנות אותו. סל האשפה בסרגל מחזיר את המקור.',
   erase: 'גררו מלבן על האזור שרוצים למחוק. הכיסוי מקבל את צבע הרקע של הדף. שימו לב: הטקסט המקורי נשאר בתוך הקובץ מתחת לכיסוי, ולכן זה לא מתאים להסתרת מידע רגיש.',
 };
 
@@ -780,7 +780,7 @@ function setMode(m) {
   document.querySelectorAll('#edModes .mode').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.mode === m)));
   $('stage').dataset.mode = m;
   $('edTextTools').classList.toggle('off', m === 'erase');
-  $('lineMode').hidden = m !== 'edit';
+  $('unitSeg').hidden = m !== 'edit';
   drawOverlays();
 }
 async function drawEditor() {
@@ -800,7 +800,7 @@ async function drawEditor() {
   } catch (e) { console.warn(e); }
   if (ed.pid !== p.id) return;
   const pageChanged = ed.pg !== pg || ed.R !== R;
-  Object.assign(ed, { pg, R, items, base: pg.getViewport({ scale: 1, rotation: R }) });
+  Object.assign(ed, { pg, R, items, units: null, base: pg.getViewport({ scale: 1, rotation: R }) });
   computeFit();
   if (pageChanged) { $('stage').querySelector('canvas')?.remove(); ed.canvas = null; }
   layoutEditor();
@@ -943,12 +943,13 @@ function drawOverlays() {
     stage.appendChild(el);
   }
   if (ed.mode === 'edit') {
-    const used = usedItems(p);
-    for (const it of ed.items) {
-      if (used.has(it.i)) continue;
-      const v = toView(itemBox(it));
+    const covers = (p.rects || []).filter(r => r.link);
+    for (const u of getUnits()) {
+      const cx = (u.x1 + u.x2) / 2, cy = u.y + u.h * 0.3;
+      if (covers.some(r => cx > r.x1 && cx < r.x2 && cy > r.y1 && cy < r.y2)) continue;   // already changed
+      const v = toView(unitBox(u));
       const el = document.createElement('div');
-      el.className = 'ti'; el.dataset.i = it.i; el.title = it.str;
+      el.className = 'ti'; el.dataset.i = u.id; el.title = u.text;
       Object.assign(el.style, { left: v.left + 'px', top: v.top + 'px', width: v.width + 'px', height: v.height + 'px' });
       stage.appendChild(el);
     }
@@ -1020,48 +1021,113 @@ function guessFont(it) {
   ensureFont(font).then(() => { if (edActive()) drawOverlays(); });
   return { font, bold };
 }
-const usedItems = (p) => new Set(p.overlays.flatMap(o => o.srcItems || (o.srcItem != null ? [o.srcItem] : [])));
-/* The words around a clicked word that form one line (same baseline and size, close together) */
-function lineItems(p, it) {
-  const h = itemBox(it).h, used = usedItems(p);
-  const same = ed.items.filter(x => !used.has(x.i) && Math.abs(x.transform[5] - it.transform[5]) < h * 0.35 && Math.abs(itemBox(x).h - h) < h * 0.45)
-    .sort((a, b) => a.transform[4] - b.transform[4]);
-  let i = same.findIndex(x => x.i === it.i); if (i < 0) return [it];
-  let lo = i, hi = i;
-  const gap = (a, b) => b.transform[4] - (a.transform[4] + a.width);
-  while (lo > 0 && gap(same[lo - 1], same[lo]) < h * 1.6) lo--;
-  while (hi < same.length - 1 && gap(same[hi], same[hi + 1]) < h * 1.6) hi++;
-  return same.slice(lo, hi + 1);
+/* ---------- Letters, words and lines ----------
+   PDFs store text in pieces of any size: a whole line, one word, or a single letter.
+   The pieces are cut into letters (positions estimated from letter widths) and joined back into
+   words and lines by the gaps between them, so a tap selects exactly the unit the user chose. */
+const unitBox = (u) => ({ x1: u.x1 - u.h * 0.03, y1: u.y - u.h * 0.28, x2: u.x2 + u.h * 0.03, y2: u.y + u.h * 0.95, h: u.h });
+function letterPieces() {
+  const out = [];
+  for (const it of ed.items) {
+    const h = itemBox(it).h, s = it.str, y = it.transform[5], x0 = it.transform[4];
+    measureCtx.font = `400 ${h}px Arimo, Arial, sans-serif`;
+    const chars = [...s];
+    const w = chars.map(ch => measureCtx.measureText(ch).width || h * 0.3);
+    const k = it.width / (w.reduce((a, b) => a + b, 0) || 1);
+    const rtlItem = isHebrew(s) || it.dir === 'rtl';
+    // split into words (runs without spaces) in logical order, with their offset from the start edge
+    let pos = 0, word = null;
+    const words = [];
+    chars.forEach((ch, n) => {
+      if (/\s/.test(ch)) { word = null; pos += w[n]; return; }
+      if (!word) { word = { start: pos, chars: [] }; words.push(word); }
+      word.chars.push({ ch, w: w[n] }); pos += w[n];
+    });
+    for (const wd of words) {
+      const ww = wd.chars.reduce((a, c) => a + c.w, 0);
+      const left = rtlItem ? x0 + it.width - (wd.start + ww) * k : x0 + wd.start * k;
+      const ltrWord = !wd.chars.some(c => isHebrew(c.ch));        // numbers and English read left to right
+      let cur = ltrWord ? left : left + ww * k;
+      for (const c of wd.chars) {
+        const cw = c.w * k;
+        const x1 = ltrWord ? cur : cur - cw;
+        out.push({ ch: c.ch, x1, x2: x1 + cw, y, h, item: it.i });
+        cur = ltrWord ? cur + cw : cur - cw;
+      }
+    }
+  }
+  return out;
 }
-function replaceItem(p, it) {
-  const its = prefs.lineMode ? lineItems(p, it) : [it];
+/* Join letters that sit on one baseline into runs; a gap wider than maxGap starts a new run */
+function joinPieces(pieces, maxGap) {
+  const lines = [];
+  for (const pc of [...pieces].sort((a, b) => b.y - a.y || a.x1 - b.x1)) {
+    let line = lines.find(l => Math.abs(l.y - pc.y) < Math.min(l.h, pc.h) * 0.35 && Math.abs(l.h - pc.h) < Math.max(l.h, pc.h) * 0.45);
+    if (!line) { line = { y: pc.y, h: pc.h, list: [] }; lines.push(line); }
+    line.list.push(pc);
+  }
+  const units = [];
+  for (const line of lines) {
+    const list = line.list.sort((a, b) => a.x1 - b.x1);
+    let run = [list[0]];
+    const flush = () => units.push(makeUnit(run));
+    for (let n = 1; n < list.length; n++) {
+      if (list[n].x1 - list[n - 1].x2 > maxGap(line.h)) { flush(); run = []; }
+      run.push(list[n]);
+    }
+    flush();
+  }
+  return units;
+}
+function makeUnit(run) {
+  const h = Math.max(...run.map(r => r.h)), y = run[0].y;
+  const rtl = run.some(r => isHebrew(r.ch)) || ed.items.some(x => Math.abs(x.transform[5] - y) < h * 0.3 && isHebrew(x.str));
+  // reading order: right to left in Hebrew, but numbers and English keep their own order
+  const groups = [];
+  for (const r of [...run].sort((a, b) => a.x1 - b.x1)) {
+    const ltr = !isHebrew(r.ch) && !/[\s"'.,:;!?()\-–]/.test(r.ch);
+    const g = groups[groups.length - 1];
+    const gap = g ? r.x1 - g.x2 : 0;
+    if (g && g.ltr === ltr && gap < h * 0.12) { g.items.push(r); g.x2 = r.x2; }
+    else groups.push({ ltr, items: [r], x1: r.x1, x2: r.x2, gapBefore: gap });
+  }
+  const seq = rtl ? [...groups].reverse() : groups;
+  let text = '';
+  seq.forEach((g, n) => {
+    const neighbour = rtl ? seq[n - 1] : null;
+    const gapBefore = rtl ? (neighbour ? neighbour.x1 - g.x2 : 0) : g.gapBefore;
+    if (n && gapBefore > h * 0.12) text += ' ';
+    const chars = (g.ltr || !rtl) ? g.items : [...g.items].reverse();
+    text += chars.map(c => c.ch).join('');
+  });
+  return { text, x1: Math.min(...run.map(r => r.x1)), x2: Math.max(...run.map(r => r.x2)), y, h, rtl, items: [...new Set(run.map(r => r.item))] };
+}
+function getUnits() {
+  const mode = prefs.unit;
+  if (ed.units && ed.units.mode === mode) return ed.units.list;
+  const letters = letterPieces();
+  let list;
+  if (mode === 'letter') list = letters.map(l => makeUnit([l]));
+  else list = joinPieces(letters, mode === 'line' ? (h) => h * 1.6 : (h) => h * 0.12);
+  list.forEach((u, n) => { u.id = n; });
+  ed.units = { mode, list };
+  return list;
+}
+function replaceUnit(p, u) {
   snapshot();
-  const boxes = its.map(itemBox);
-  const box = { x1: Math.min(...boxes.map(b => b.x1)), y1: Math.min(...boxes.map(b => b.y1)), x2: Math.max(...boxes.map(b => b.x2)), y2: Math.max(...boxes.map(b => b.y2)), h: itemBox(it).h };
+  const box = unitBox(u);
   const v = toView(box);
   const bg = sampleBg(v);
   const rect = { id: uid++, x1: box.x1, y1: box.y1, x2: box.x2, y2: box.y2, color: bg, link: true };
   p.rects = p.rects || [];
   p.rects.push(rect);
-  // In a Hebrew line, changed text keeps its right edge (the side the line starts from)
-  const rtl = its.some(x => isHebrew(x.str)) || ed.items.some(x => Math.abs(x.transform[5] - it.transform[5]) < box.h * 0.3 && isHebrew(x.str));
-  // words in reading order, with a space wherever the original had a gap
-  const ordered = [...its].sort((a, b) => rtl ? b.transform[4] - a.transform[4] : a.transform[4] - b.transform[4]);
-  let text = '';
-  ordered.forEach((x, k) => {
-    if (k) {
-      const prev = ordered[k - 1];
-      const g = rtl ? prev.transform[4] - (x.transform[4] + x.width) : x.transform[4] - (prev.transform[4] + prev.width);
-      if (g > box.h * 0.12 && !/\s$/.test(text) && !/^\s/.test(x.str)) text += ' ';
-    }
-    text += x.str;
-  });
-  const g = guessFont(it);
+  const first = ed.items.find(x => x.i === u.items[0]);
+  const g = first ? guessFont(first) : { font: 'arimo', bold: false };
   const o = {
-    id: uid++, text, size: Math.round(box.h * 10) / 10, color: textColorInside(v, bg), bold: g.bold, font: g.font,
-    // anchored at the start edge of the original words, on the original baseline
-    px: rtl ? box.x2 - box.h * 0.05 : box.x1 + box.h * 0.05, py: it.transform[5], vb: 'base', ang: 0, anchor: rtl ? 'r' : 'l',
-    srcItem: it.i, srcItems: its.map(x => x.i), rectId: rect.id,
+    id: uid++, text: u.text, size: Math.round(u.h * 10) / 10, color: textColorInside(v, bg), bold: g.bold, font: g.font,
+    // anchored at the start edge of the original text (right edge in Hebrew), on its baseline
+    px: u.rtl ? u.x2 : u.x1, py: u.y, srcY: u.y, vb: 'base', ang: 0, anchor: u.rtl ? 'r' : 'l',
+    srcItem: u.items[0], srcItems: u.items, rectId: rect.id,
   };
   p.overlays.push(o);
   ed.selId = o.id; ed.selRect = null;
@@ -1074,7 +1140,8 @@ function snapToLine(o) {
   hideGuide();
   if (!prefs.lock || ((o.ang % 360) + 360) % 360 !== 0 || (o.rot || 0) !== 0 || o.vb !== 'base') return;
   let y = null;
-  if (o.srcItem != null) {
+  if (o.srcY != null) y = o.srcY;
+  else if (o.srcItem != null) {
     const it = ed.items.find(x => x.i === o.srcItem);
     if (it) y = it.transform[5];
   } else {
@@ -1194,8 +1261,8 @@ $('stage').addEventListener('pointermove', (e) => {
 function doTap(t, e) {
   const p = edPage(); if (!p) return;
   if (t.kind === 'ti') {
-    const it = ed.items.find(x => x.i === t.i);
-    if (it) replaceItem(p, it);
+    const u = getUnits().find(x => x.id === t.i);
+    if (u) replaceUnit(p, u);
     return;
   }
   if (t.kind !== 'add') return;
@@ -1245,11 +1312,12 @@ $('stage').addEventListener('pointercancel', endPointer);
 
 /* ---------- Text style: floating toolbar and sheets ---------- */
 function loadPrefs() {
-  const d = { lock: true, lineMode: false, recent: [] };
+  const d = { lock: true, unit: 'word', recent: [] };
   try { return Object.assign(d, JSON.parse(localStorage.getItem('dafdaf.prefs') || '{}')); } catch (_) { return d; }
 }
 function savePrefs() { try { localStorage.setItem('dafdaf.prefs', JSON.stringify(prefs)); } catch (_) {} }
 const prefs = loadPrefs();
+if (!['letter', 'word', 'line'].includes(prefs.unit)) prefs.unit = prefs.lineMode ? 'line' : 'word';
 const defStyle = { font: 'heebo', size: 18, color: '#1a3fb0', bold: false, it: false, u: false, st: false, hl: '', align: '', lh: 1.2, ls: 0, op: 1, rot: 0 };
 const styleCopy = (src) => Object.fromEntries(Object.keys(defStyle).map(k => [k, src[k] ?? defStyle[k]]));
 const curStyle = () => edSel() || defStyle;
@@ -1418,8 +1486,12 @@ $('rotReset').onclick = () => { applyStyle({ rot: 0 }); syncStyleSheet(); };
 $('lockLine').addEventListener('change', () => { prefs.lock = $('lockLine').checked; savePrefs(); });
 
 /* Edit mode: word or whole line */
-$('lineMode').onclick = () => { prefs.lineMode = !prefs.lineMode; savePrefs(); $('lineMode').setAttribute('aria-pressed', String(prefs.lineMode)); };
-$('lineMode').setAttribute('aria-pressed', String(prefs.lineMode));
+function syncUnitSeg() { $('unitSeg').querySelectorAll('[data-unit]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.unit === prefs.unit))); }
+$('unitSeg').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-unit]'); if (!b) return;
+  prefs.unit = b.dataset.unit; savePrefs(); syncUnitSeg(); drawOverlays();
+});
+syncUnitSeg();
 
 document.querySelectorAll('#edModes .mode').forEach(b => b.addEventListener('click', () => setMode(b.dataset.mode)));
 document.addEventListener('keydown', (e) => {
