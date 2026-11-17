@@ -1,4 +1,6 @@
 // End-to-end tests for עורך MY PDF.
+// BROWSER=webkit runs them in WebKit (the engine of Safari on iPhone) as an iPhone 14;
+// the default is Chromium as a Pixel 7 (Android).
 // Opens the app in headless Chromium, works with real PDFs (made during the test) and checks
 // the PDFs that come out, using the PDF reader inside the app.
 //   node tests/run.mjs            run everything
@@ -12,7 +14,10 @@ import { createRequire } from 'node:module';
 import { execFileSync } from 'node:child_process';
 
 const require = createRequire(import.meta.url);
-const { chromium, devices } = require('playwright');
+const playwright = require('playwright');
+const { chromium, devices } = playwright;
+const ENGINE = process.env.BROWSER === 'webkit' ? 'webkit' : 'chromium';
+const DEVICE = ENGINE === 'webkit' ? devices['iPhone 14'] : devices['Pixel 7'];
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const only = process.argv[2] || '';
 
@@ -26,13 +31,16 @@ const server = createServer(async (req, res) => {
 await new Promise(r => server.listen(0, '127.0.0.1', r));
 const URL_APP = `http://127.0.0.1:${server.address().port}/index.html`;
 const tmp = await mkdtemp(join(tmpdir(), 'mypdf-test-'));
-const browser = await chromium.launch();
+const browser = await playwright[ENGINE].launch();
+// test PDFs with Hebrew text are printed by Chromium (only Chromium can print to PDF)
+const printer = ENGINE === 'chromium' ? browser : await chromium.launch();
+console.log(`engine: ${ENGINE} (${ENGINE === 'webkit' ? 'iPhone 14' : 'Pixel 7'})`);
 
 /* ---------- helpers ---------- */
 let errors = [];
 async function open(opts = {}) {
   const { hash, tour, ...ctxOpts } = opts;
-  const ctx = await browser.newContext({ ...devices['Pixel 7'], acceptDownloads: true, serviceWorkers: 'block', ...ctxOpts });
+  const ctx = await browser.newContext({ ...DEVICE, acceptDownloads: true, serviceWorkers: 'block', ...ctxOpts });
   const page = await ctx.newPage();
   // the intro tour is tested on its own; elsewhere it is marked as seen
   if (!opts.tour) await page.addInitScript(() => { try { localStorage.setItem('dafdaf.prefs', JSON.stringify({ tourDone: true })); } catch (_) {} });
@@ -76,7 +84,7 @@ async function readPdf(page, file, password) {
 }
 /* Test PDFs: Hebrew text made by Chromium, everything else with the app's pdf-lib */
 async function hebrewPdf(html, name) {
-  const pg = await browser.newPage();
+  const pg = await printer.newPage();
   await pg.setContent(`<html dir="rtl"><body style="font-family:Arial;font-size:16px;padding:40px">${html}</body></html>`);
   const file = join(tmp, name); await pg.pdf({ path: file, format: 'A4' }); await pg.close();
   return file;
@@ -304,6 +312,6 @@ for (const t of tests.filter(t => t.name.includes(only))) {
     console.log(`✓ ${t.name} (${((Date.now() - t0) / 1000).toFixed(1)}s)`);
   } catch (e) { failed++; console.log(`✗ ${t.name}\n    ${e.message}`); }
 }
-await browser.close(); server.close();
+await browser.close(); if (printer !== browser) await printer.close(); server.close();
 console.log(failed ? `\n${failed} test(s) failed` : '\nall tests passed');
 process.exit(failed ? 1 : 0);
