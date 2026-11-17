@@ -16,7 +16,7 @@
 <meta name="apple-mobile-web-app-title" content="MY PDF">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <title>עורך MY PDF</title>
-<link rel="stylesheet" href="app.css?v=19">
+<link rel="stylesheet" href="app.css?v=20">
 </head>
 <body>
 
@@ -68,6 +68,9 @@
   <symbol id="i-cal" viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="15" rx="2.5"/><path d="M3.5 10h17M8 3v4M16 3v4"/></symbol>
   <symbol id="i-photos" viewBox="0 0 24 24"><rect x="7" y="3" width="14" height="14" rx="2"/><path d="M17 21H5a2 2 0 0 1-2-2V7"/><path d="m21 13-4-4-6 6"/></symbol>
   <symbol id="i-share" viewBox="0 0 24 24"><circle cx="18" cy="5" r="2.5"/><circle cx="6" cy="12" r="2.5"/><circle cx="18" cy="19" r="2.5"/><path d="m8.2 10.8 7.6-4.4M8.2 13.2l7.6 4.4"/></symbol>
+  <symbol id="i-file-plus" viewBox="0 0 24 24"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9Z"/><path d="M14 3v6h6"/><path d="M12 12v6M9 15h6"/></symbol>
+  <symbol id="i-crop" viewBox="0 0 24 24"><path d="M6 2v14a2 2 0 0 0 2 2h14"/><path d="M18 22V8a2 2 0 0 0-2-2H2"/></symbol>
+  <symbol id="i-paste" viewBox="0 0 24 24"><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/></symbol>
   <symbol id="i-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
   <symbol id="i-restart" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></symbol>
 </svg>
@@ -171,6 +174,7 @@
         <button class="fb" type="button" id="obThick" aria-label="קו עבה" title="קו עבה"><span class="lw thick"></span></button>
         <button class="fb" type="button" id="obFill" aria-label="מילוי" title="מילוי בצבע" aria-pressed="false"><svg class="i"><use href="#i-drop"/></svg></button>
         <button class="fb" type="button" id="obDup" aria-label="שכפול" title="שכפול"><svg class="i"><use href="#i-copy"/></svg></button>
+        <button class="fb" type="button" id="obCopy" aria-label="העתקה" title="העתקה (להדבקה בכל עמוד)"><svg class="i"><use href="#i-paste"/></svg></button>
         <button class="fb danger" type="button" id="obDel" aria-label="מחיקה" title="מחיקה"><svg class="i"><use href="#i-trash"/></svg></button>
       </div>
       <div class="fmtbar" id="fmtBar" role="toolbar" aria-label="עיצוב טקסט" hidden>
@@ -188,8 +192,10 @@
         <span class="fb-sep"></span>
         <button class="fb" type="button" id="fbColor" aria-label="צבע ומרקר" title="צבע ומרקר"><span class="sw" id="fbSwatch"></span></button>
         <button class="fb" type="button" id="fbMore" aria-label="עוד אפשרויות עיצוב" title="יישור, רווחים, שקיפות וסיבוב"><svg class="i"><use href="#i-sliders"/></svg></button>
+        <button class="fb" type="button" id="fbCopy" aria-label="העתקה" title="העתקה"><svg class="i"><use href="#i-copy"/></svg></button>
         <button class="fb danger" type="button" id="fbDelete" aria-label="מחיקת הטקסט" title="מחיקה" hidden><svg class="i"><use href="#i-trash"/></svg></button>
       </div>
+      <button class="paste-btn" type="button" id="pasteBtn" hidden><svg class="i"><use href="#i-paste"/></svg>הדבקה</button>
       <div class="strip-wrap">
         <button class="iconbtn sm" type="button" id="edPrev" aria-label="עמוד קודם"><svg class="i"><use href="#i-right"/></svg></button>
         <div class="strip" id="strip" aria-label="מעבר בין עמודים"></div>
@@ -236,6 +242,8 @@
     <button class="act" type="button" data-act="left"><svg class="i"><use href="#i-right"/></svg><span>הזזה קדימה</span></button>
     <button class="act" type="button" data-act="right"><svg class="i"><use href="#i-left"/></svg><span>הזזה אחורה</span></button>
     <button class="act" type="button" data-act="select"><svg class="i"><use href="#i-select"/></svg><span>בחירה</span></button>
+    <button class="act" type="button" data-act="blank"><svg class="i"><use href="#i-file-plus"/></svg><span>עמוד ריק אחריו</span></button>
+    <button class="act" type="button" data-act="crop"><svg class="i"><use href="#i-crop"/></svg><span>חיתוך שוליים</span></button>
     <button class="act danger" type="button" data-act="del"><svg class="i"><use href="#i-trash"/></svg><span>מחיקה</span></button>
   </div>
 </dialog>
@@ -360,6 +368,7 @@
     <button class="act" type="button" data-ins="mark"><svg class="i"><use href="#i-marker"/></svg><span>מרקר</span></button>
     <button class="act" type="button" data-ins="text"><svg class="i"><use href="#i-type"/></svg><span>טקסט</span></button>
     <button class="act" type="button" data-ins="date"><svg class="i"><use href="#i-cal"/></svg><span>תאריך היום</span></button>
+    <button class="act" type="button" data-ins="blank"><svg class="i"><use href="#i-file-plus"/></svg><span>עמוד ריק</span></button>
     <button class="act" type="button" data-ins="rect"><svg class="i"><use href="#i-square"/></svg><span>מלבן</span></button>
     <button class="act" type="button" data-ins="ellipse"><svg class="i"><use href="#i-circle"/></svg><span>עיגול</span></button>
     <button class="act" type="button" data-ins="line"><svg class="i"><use href="#i-line"/></svg><span>קו</span></button>
@@ -399,11 +408,31 @@
   </div>
 </dialog>
 
+<dialog class="sheet-dlg" id="cropSheet" aria-labelledby="cropTitle">
+  <div class="sh-grab" aria-hidden="true"></div>
+  <div class="sh-head"><h2 id="cropTitle">חיתוך שוליים</h2><button class="iconbtn" type="button" data-close aria-label="סגירה"><svg class="i"><use href="#i-x"/></svg></button></div>
+  <div class="sh-body">
+    <div class="crop-prev"><canvas id="cropCanvas" aria-label="תצוגה של העמוד והחיתוך"></canvas></div>
+    <div class="crop-grid">
+      <div class="field"><label for="crop_t">למעלה: <b id="crop_t_v">0</b></label><input type="range" id="crop_t" min="0" max="100" value="0"></div>
+      <div class="field"><label for="crop_b">למטה: <b id="crop_b_v">0</b></label><input type="range" id="crop_b" min="0" max="100" value="0"></div>
+      <div class="field"><label for="crop_r">ימין: <b id="crop_r_v">0</b></label><input type="range" id="crop_r" min="0" max="100" value="0"></div>
+      <div class="field"><label for="crop_l">שמאל: <b id="crop_l_v">0</b></label><input type="range" id="crop_l" min="0" max="100" value="0"></div>
+    </div>
+    <div class="row nowrap">
+      <button class="btn" type="button" id="cropAuto"><svg class="i"><use href="#i-crop"/></svg>חיתוך אוטומטי של שוליים לבנים</button>
+      <button class="btn" type="button" id="cropReset">איפוס</button>
+    </div>
+    <label class="switch"><input type="checkbox" id="cropAll"><span>להחיל את אותם שוליים על כל העמודים</span></label>
+    <button class="btn primary large" type="button" id="cropApply">החלת החיתוך</button>
+  </div>
+</dialog>
+
 <div id="toast" role="status" hidden></div>
 <div class="busy" id="busy" hidden><div id="busyText">מכין את הקובץ…</div></div>
 
 <script src="vendor/pdf.min.js"></script>
 <script src="vendor/pdf-lib.min.js"></script>
-<script src="app.js?v=19"></script>
+<script src="app.js?v=20"></script>
 </body>
 </html>
