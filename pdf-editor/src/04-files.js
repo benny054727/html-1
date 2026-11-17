@@ -4,7 +4,7 @@ async function addFiles(fileList) {
   if (!files.length) { toast('אפשר להוסיף רק קובצי PDF'); return; }
   busy(true, 'קורא את הקבצים…');
   let added = 0;
-  const before = JSON.stringify(state.pages);
+  const before = JSON.stringify(state.pages), firstNew = state.pages.length;
   for (const f of files) {
     try {
       if (f.size > MAX_FILE_BYTES) { toast(`"${f.name}" גדול מדי (מעל ${MAX_FILE_BYTES / 1024 / 1024} MB).`, 5000); continue; }
@@ -20,9 +20,13 @@ async function addFiles(fileList) {
       toast(msg, 5000);
     }
   }
-  if (added) { history.push(before); $('undoBtn').disabled = false; maybeTour(); }
+  const intent = startIntent; startIntent = null;
   busy(false);
   renderGrid();
+  if (added) {
+    history.push(before); $('undoBtn').disabled = false;
+    if (!(intent && await runStartIntent(intent, state.pages[firstNew], added))) maybeTour();
+  }
 }
 function openPdf(bytes) {
   return pdfjsLib.getDocument({

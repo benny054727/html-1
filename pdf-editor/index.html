@@ -26,7 +26,7 @@
 <meta name="apple-mobile-web-app-title" content="MY PDF">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <title>עורך MY PDF</title>
-<link rel="stylesheet" href="app.css?v=24">
+<link rel="stylesheet" href="app.css?v=25">
 </head>
 <body>
 
@@ -85,6 +85,10 @@
   <symbol id="i-lock" viewBox="0 0 24 24"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></symbol>
   <symbol id="i-help" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9.5"/><path d="M9.5 9a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6V14M12 17.5v.01"/></symbol>
   <symbol id="i-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+  <symbol id="i-form" viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h3"/><rect x="13" y="11" width="4" height="3" rx=".6"/><path d="m8 16.5 1.3 1.3L12 15"/></symbol>
+  <symbol id="i-shrink" viewBox="0 0 24 24"><path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7"/></symbol>
+  <symbol id="i-redact" viewBox="0 0 24 24"><path d="M4 6h16M4 18h9"/><rect x="4" y="10" width="16" height="4" rx="1" fill="currentColor"/></symbol>
+  <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9.5"/><path d="M12 11v6M12 7.5v.01"/></symbol>
   <symbol id="i-restart" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></symbol>
 </svg>
 
@@ -93,10 +97,13 @@
 <!-- Start screen: no document yet -->
 <section class="home" id="home">
   <div class="home-main">
-    <svg class="home-logo" viewBox="0 0 100 100" role="img" aria-label="הלוגו של עורך MY PDF"><use href="#logo"/></svg>
-    <h1>עורך <span class="ltr">MY PDF</span></h1>
-    <p class="lead">עריכת PDF בעברית, ישר מהטלפון או מהמחשב</p>
-    <p class="privacy"><svg class="i"><use href="#i-shield"/></svg> הקבצים נשארים אצלכם. שום דבר לא נשלח לשרת.</p>
+    <header class="home-brand">
+      <svg class="home-logo" viewBox="0 0 100 100" role="img" aria-label="הלוגו של עורך MY PDF"><use href="#logo"/></svg>
+      <div>
+        <h1>עורך <span class="ltr">MY PDF</span></h1>
+        <p class="lead">עריכת PDF בעברית, ישר מהטלפון או מהמחשב</p>
+      </div>
+    </header>
     <div class="resume" id="resumeCard" hidden>
       <div class="resume-info"><span class="lbl">להמשיך מאיפה שעצרת?</span><b id="resumeName">מסמך</b><small id="resumeMeta"></small></div>
       <div class="resume-actions">
@@ -105,19 +112,28 @@
       </div>
     </div>
     <div class="drop" id="drop">
-      <svg class="i big"><use href="#i-file"/></svg>
-      <strong>גררו לכאן קובץ PDF</strong>
-      <button class="btn primary large" id="pickBtn" type="button">בחירת קבצים</button>
-      <button class="btn link" id="sampleBtn" type="button">או נסו קובץ לדוגמה</button>
+      <button class="open-cta" id="pickBtn" type="button"><svg class="i"><use href="#i-file"/></svg><span><b>פתיחת קובץ PDF</b><small>מהטלפון, מהמחשב או מהענן</small></span></button>
+      <p class="drop-hint">או גררו קובץ לכאן</p>
+      <button class="btn link" id="sampleBtn" type="button">אין קובץ בהישג יד? נסו קובץ לדוגמה</button>
+    </div>
+    <h2 class="tiles-title">מה תרצו לעשות?</h2>
+    <div class="tiles" id="startTiles">
+      <button type="button" class="tile" data-start="sign"><svg class="i"><use href="#i-sign"/></svg><b>חתימה</b><small>חותמים באצבע ומניחים על המסמך</small></button>
+      <button type="button" class="tile" data-start="edit"><svg class="i"><use href="#i-pencil"/></svg><b>עריכת טקסט</b><small>משנים מילים ושורות קיימות</small></button>
+      <button type="button" class="tile" data-start="form"><svg class="i"><use href="#i-form"/></svg><b>מילוי טופס</b><small>כותבים בשדות ובמשבצות</small></button>
+      <button type="button" class="tile" data-start="merge"><svg class="i"><use href="#i-layers"/></svg><b>מיזוג קבצים</b><small>כמה קבצים לקובץ אחד</small></button>
+      <button type="button" class="tile" data-start="split"><svg class="i"><use href="#i-cut"/></svg><b>פיצול ובחירה</b><small>שומרים רק את העמודים שצריך</small></button>
+      <button type="button" class="tile" data-start="shrink"><svg class="i"><use href="#i-shrink"/></svg><b>הקטנת קובץ</b><small>קובץ קל יותר לשליחה</small></button>
+      <button type="button" class="tile" data-start="imgs"><svg class="i"><use href="#i-photos"/></svg><b>תמונות ל-<span class="ltr">PDF</span></b><small>צילומים הופכים לעמודים</small></button>
+      <button type="button" class="tile" data-start="lock"><svg class="i"><use href="#i-lock"/></svg><b>נעילה בסיסמה</b><small>רק מי שיודע את הסיסמה יפתח</small></button>
+      <button type="button" class="tile" data-start="redact"><svg class="i"><use href="#i-redact"/></svg><b>השחרה</b><small>מוחקים מידע רגיש לגמרי</small></button>
     </div>
     <button class="install-cta" id="installBtn" type="button" hidden><svg class="i"><use href="#i-install"/></svg><span><b>התקנת האפליקציה</b><small>הוספה למסך הבית, עובדת גם בלי אינטרנט</small></span></button>
     <p class="ios-hint" id="iosHint" hidden>להתקנה באייפון: לוחצים על <b>שיתוף</b> ואז על <b>"הוספה למסך הבית"</b>.</p>
-    <ul class="features">
-      <li><svg class="i"><use href="#i-pencil"/></svg><b>עריכה</b><span>הוספה ושינוי של טקסט בעברית, ומחיקת אזורים</span></li>
-      <li><svg class="i"><use href="#i-layers"/></svg><b>מיזוג</b><span>כמה קבצים הופכים לקובץ אחד</span></li>
-      <li><svg class="i"><use href="#i-grid"/></svg><b>סידור</b><span>סיבוב, שכפול, מחיקה ושינוי סדר</span></li>
-      <li><svg class="i"><use href="#i-cut"/></svg><b>פיצול</b><span>הורדה של העמודים שבחרתם בלבד</span></li>
-    </ul>
+    <footer class="home-foot">
+      <p class="privacy"><svg class="i"><use href="#i-shield"/></svg> הקבצים נשארים אצלכם. שום דבר לא נשלח לשרת.</p>
+      <button class="btn link" type="button" id="aboutBtn">אודות ופרטיות</button>
+    </footer>
   </div>
 </section>
 
@@ -337,7 +353,27 @@
     <button type="button" id="addFilesBtn"><svg class="i"><use href="#i-plus"/></svg>הוספת קובץ PDF למסמך</button>
     <button type="button" id="startSelBtn"><svg class="i"><use href="#i-select"/></svg>בחירת כמה עמודים</button>
     <button type="button" id="tourBtn"><svg class="i"><use href="#i-help"/></svg>סיור היכרות באפליקציה</button>
+    <button type="button" id="aboutMenuBtn"><svg class="i"><use href="#i-info"/></svg>אודות ופרטיות</button>
     <button type="button" class="danger" id="clearBtn"><svg class="i"><use href="#i-restart"/></svg>התחלה מחדש עם קובץ אחר</button>
+  </div>
+</dialog>
+
+<dialog class="sheet-dlg tall" id="aboutSheet" aria-labelledby="aboutTitle">
+  <div class="sh-grab" aria-hidden="true"></div>
+  <div class="sh-head"><h2 id="aboutTitle">אודות ופרטיות</h2><button class="iconbtn" type="button" data-close aria-label="סגירה"><svg class="i"><use href="#i-x"/></svg></button></div>
+  <div class="sh-body about">
+    <h3><svg class="i"><use href="#i-shield"/></svg>הקבצים שלכם לא יוצאים מהמכשיר</h3>
+    <p>כל העבודה על הקבצים נעשית בתוך הדפדפן, במכשיר שלכם. הקבצים, החתימות והתמונות לא נשלחים לשום שרת, ואף אחד מלבדכם לא רואה אותם.</p>
+    <h3><svg class="i"><use href="#i-cal"/></svg>שמירה אוטומטית במכשיר</h3>
+    <p>כדי שתוכלו להמשיך מאיפה שעצרתם, העבודה נשמרת בזיכרון של הדפדפן במכשיר הזה בלבד. "התחלה מחדש עם קובץ אחר" בתפריט ⋯ מוחקת אותה.</p>
+    <h3><svg class="i"><use href="#i-eye"/></svg>בלי מעקב ובלי פרסומות</h3>
+    <p>אין באתר כלי מעקב, עוגיות פרסום או סטטיסטיקות. אחרי הכניסה הראשונה האפליקציה עובדת גם בלי אינטרנט.</p>
+    <h3><svg class="i"><use href="#i-info"/></svg>ספריות קוד פתוח</h3>
+    <ul class="libs">
+      <li><span class="ltr">PDF.js</span> <small class="ltr">Apache 2.0</small></li>
+      <li><span class="ltr">pdf-lib, fontkit, @cantoo/pdf-lib</span> <small class="ltr">MIT</small></li>
+      <li>גופנים מ-<span class="ltr">Google Fonts</span> <small class="ltr">SIL Open Font License</small></li>
+    </ul>
   </div>
 </dialog>
 
@@ -491,6 +527,6 @@
 <script src="compat.js"></script>
 <script src="vendor/pdf.min.js"></script>
 <script src="vendor/pdf-lib.min.js"></script>
-<script src="app.js?v=24"></script>
+<script src="app.js?v=25"></script>
 </body>
 </html>
