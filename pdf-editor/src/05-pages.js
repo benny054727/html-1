@@ -330,13 +330,14 @@ window.addEventListener('dragover', (e) => { if (hasFiles(e)) e.preventDefault()
 window.addEventListener('drop', (e) => {
   if (!hasFiles(e)) return;
   e.preventDefault(); fileDragDepth = 0; document.body.classList.remove('dragging-files');
+  startIntent = null;
   addFiles(e.dataTransfer.files);
 });
 
 /* ---------- Top bar, tab bar, selection bar ---------- */
-$('pickBtn').onclick = () => $('fileInput').click();
+$('pickBtn').onclick = () => { startIntent = null; $('fileInput').click(); };
 $('fileInput').onchange = (e) => { addFiles(e.target.files); e.target.value = ''; };
-$('sampleBtn').onclick = makeSample;
+$('sampleBtn').onclick = () => { startIntent = null; makeSample(); };
 $('undoBtn').onclick = undo;
 $('moreBtn').onclick = () => openSheet('moreSheet');
 $('addFilesBtn').onclick = () => { closeSheets(); $('fileInput').click(); };

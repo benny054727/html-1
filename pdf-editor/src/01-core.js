@@ -28,6 +28,7 @@ const state = {
   forms: {},     // source index -> { field name: value }
 };
 let uid = 1;
+let startIntent = null;   // what a home-screen tile asked for, run once the file is in
 const persisted = new Set();   // keys of files and pictures already in device storage
 const history = [];
 const thumbCache = new Map(); // page id -> {key, canvas}

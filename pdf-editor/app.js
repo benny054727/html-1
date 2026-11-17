@@ -30,6 +30,7 @@ const state = {
   forms: {},     // source index -> { field name: value }
 };
 let uid = 1;
+let startIntent = null;   // what a home-screen tile asked for, run once the file is in
 const persisted = new Set();   // keys of files and pictures already in device storage
 const history = [];
 const thumbCache = new Map(); // page id -> {key, canvas}
@@ -484,7 +485,7 @@ async function addFiles(fileList) {
   if (!files.length) { toast('אפשר להוסיף רק קובצי PDF'); return; }
   busy(true, 'קורא את הקבצים…');
   let added = 0;
-  const before = JSON.stringify(state.pages);
+  const before = JSON.stringify(state.pages), firstNew = state.pages.length;
   for (const f of files) {
     try {
       if (f.size > MAX_FILE_BYTES) { toast(`"${f.name}" גדול מדי (מעל ${MAX_FILE_BYTES / 1024 / 1024} MB).`, 5000); continue; }
@@ -500,9 +501,13 @@ async function addFiles(fileList) {
       toast(msg, 5000);
     }
   }
-  if (added) { history.push(before); $('undoBtn').disabled = false; maybeTour(); }
+  const intent = startIntent; startIntent = null;
   busy(false);
   renderGrid();
+  if (added) {
+    history.push(before); $('undoBtn').disabled = false;
+    if (!(intent && await runStartIntent(intent, state.pages[firstNew], added))) maybeTour();
+  }
 }
 function openPdf(bytes) {
   return pdfjsLib.getDocument({
@@ -909,13 +914,14 @@ window.addEventListener('dragover', (e) => { if (hasFiles(e)) e.preventDefault()
 window.addEventListener('drop', (e) => {
   if (!hasFiles(e)) return;
   e.preventDefault(); fileDragDepth = 0; document.body.classList.remove('dragging-files');
+  startIntent = null;
   addFiles(e.dataTransfer.files);
 });
 
 /* ---------- Top bar, tab bar, selection bar ---------- */
-$('pickBtn').onclick = () => $('fileInput').click();
+$('pickBtn').onclick = () => { startIntent = null; $('fileInput').click(); };
 $('fileInput').onchange = (e) => { addFiles(e.target.files); e.target.value = ''; };
-$('sampleBtn').onclick = makeSample;
+$('sampleBtn').onclick = () => { startIntent = null; makeSample(); };
 $('undoBtn').onclick = undo;
 $('moreBtn').onclick = () => openSheet('moreSheet');
 $('addFilesBtn').onclick = () => { closeSheets(); $('fileInput').click(); };
@@ -3095,4 +3101,47 @@ if (window.visualViewport) { visualViewport.addEventListener('resize', keepTypin
 
 /* Test hook: the automated tests (tests/run.mjs) reach a few pure helpers when the page is opened with #selftest */
 if (location.hash === '#selftest') window.__mypdf = { IOS, bidiRuns, isHebrew, paperName, pageNumberText, pagesText, looksLikePdf, escapeHtml, fieldSize };
+/* ---------- Home screen: "what would you like to do?" ---------- */
+// A tile remembers what the user came to do, opens the file picker,
+// and once the file is in, takes them straight to that tool.
+$('startTiles').addEventListener('click', (e) => {
+  const t = e.target.closest('[data-start]'); if (!t) return;
+  const k = t.dataset.start;
+  if (k === 'imgs') { startIntent = null; $('imgPagesInput').click(); return; }
+  startIntent = k;
+  $('fileInput').click();
+});
+async function runStartIntent(k, first, added) {
+  if (!first) return false;
+  switch (k) {
+    case 'sign':
+      await openEditor(first.id); setMode('text'); openSignature(); return true;
+    case 'edit':
+      await openEditor(first.id); setMode('edit'); toast('הקישו על הטקסט שרוצים לשנות', 3500); return true;
+    case 'form': {
+      const p = state.pages.find(pg => pageFields(pg).length);
+      await openEditor((p || first).id); setMode('text');
+      toast(p ? 'הקישו על שדה כדי למלא אותו' : 'אין בקובץ שדות למילוי. הקישו במקום הרצוי בעמוד וכתבו', 4500);
+      return true;
+    }
+    case 'redact':
+      prefs.erase = 'redact'; savePrefs();
+      await openEditor(first.id); setMode('erase'); return true;
+    case 'split':
+      startSelecting(); toast('סמנו את העמודים שרוצים לשמור, ואז לחצו על הורדה', 4500); return true;
+    case 'merge':
+      toast(added > 1 ? 'גררו עמודים כדי לשנות את הסדר, ואז הורידו קובץ אחד' : 'להוספת קובץ נוסף לחצו על "הוספת קובץ" בסוף הרשימה', 4500);
+      return true;
+    case 'shrink':
+      if ($('dlSize').value === 'none') $('dlSize').value = 'light';
+      syncSizeNote(); $('downloadBtn').click(); return true;
+    case 'lock':
+      $('downloadBtn').click();
+      $('dlLock').checked = true; $('dlLock').dispatchEvent(new Event('change'));
+      return true;
+  }
+  return false;
+}
+$('aboutBtn').onclick = () => openSheet('aboutSheet');
+$('aboutMenuBtn').onclick = () => openSheet('aboutSheet');
 })();

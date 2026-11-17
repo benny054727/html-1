@@ -312,6 +312,32 @@ test('resume: "continue" returns to the same page, mode and zoom in the editor',
   await ctx.close();
 });
 
+test('home: each tile opens the picker and lands on its tool', async () => {
+  const file = await hebrewPdf('<p>Home tile test</p><p>Second line</p>', 'home.pdf');
+  const checks = {
+    sign: (page) => page.waitForSelector('#sigSheet[open]', { timeout: 8000 }),
+    redact: async (page) => { await page.waitForSelector('#stage[data-mode="erase"]', { timeout: 8000 });
+      assert(await page.getAttribute('#eraseSeg [data-erase="redact"]', 'aria-pressed') === 'true', 'secure redaction is chosen'); },
+    split: (page) => page.waitForSelector('#selbar:not([hidden])', { timeout: 8000 }),
+    lock: async (page) => { await page.waitForSelector('#dlSheet[open]', { timeout: 8000 });
+      assert(await page.isChecked('#dlLock') && await page.isVisible('#dlPw'), 'password box is ready'); },
+  };
+  for (const [k, check] of Object.entries(checks)) {
+    const { ctx, page } = await open();
+    if (k === 'sign') {
+      assert(await page.$$eval('#startTiles .tile', e => e.length) === 9, 'nine tiles on the home screen');
+      const over = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+      assert(over <= 0, 'no sideways scrolling on the home screen: ' + over);
+      const [chooser] = await Promise.all([page.waitForEvent('filechooser'), page.click('#startTiles [data-start="imgs"]')]);
+      assert(chooser.isMultiple() && (await chooser.element().getAttribute('accept')).startsWith('image'), 'photos tile asks for images');
+    }
+    const [chooser] = await Promise.all([page.waitForEvent('filechooser'), page.click(`#startTiles [data-start="${k}"]`)]);
+    await chooser.setFiles(file);
+    await check(page);
+    await ctx.close();
+  }
+});
+
 test('iphone: no zoom on text boxes, "file ready" sheet, launch screens', async () => {
   const { ctx, page } = await open();
   const ios = await page.evaluate(() => document.documentElement.classList.contains('ios'));
