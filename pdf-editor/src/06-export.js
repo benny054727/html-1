@@ -292,6 +292,8 @@ async function exportPages(pages, name) {
   busy(true, `מכין קובץ עם ${pages.length} עמודים…`);
   try {
     const { bytes, before, locked } = await makeFile(pages);
+    // iPhone: saving and sharing must start from a tap, so the finished file waits on a "ready" sheet
+    if (IOS) { busy(false); offerFile(bytes, name, before); return; }
     saveBytes(bytes, name);
     if (locked) setTimeout(() => toast('הקובץ נעול בסיסמה. בלי הסיסמה אי אפשר לפתוח אותו, אז כדאי לשמור אותה.', 5500), 5200);
     toast(before && before > bytes.length

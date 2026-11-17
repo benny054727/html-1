@@ -197,6 +197,36 @@ $('shareBtn').onclick = async () => {
   const name = outName();
   const file = new File([bytes], name, { type: 'application/pdf' });
   try { await navigator.share({ files: [file], title: name }); }
-  catch (e) { if (e && e.name !== 'AbortError') { saveBytes(bytes, name); toast('השיתוף לא זמין כאן, אז הקובץ ירד למכשיר.', 4500); } }
+  catch (e) {
+    if (e && e.name === 'AbortError') return;
+    // the browser allows the share sheet only right after a tap; preparing the file took too long, so ask for one more tap
+    offerFile(bytes, name);
+  }
+};
+
+/* ---------- "Your file is ready" ----------
+   Used on iPhone for every download, and anywhere a share was refused because it did not follow a tap.
+   Both buttons act inside the user's tap, which is what iOS requires. */
+let readyFile = null;
+function offerFile(bytes, name, before) {
+  readyFile = { bytes, name };
+  $('readyName').textContent = name;
+  $('readyMeta').textContent = before && before > bytes.length ? `${mb(before)} ← ${mb(bytes.length)}` : mb(bytes.length);
+  $('readyShare').hidden = !canShareFiles;
+  $('readyHint').hidden = !canShareFiles;
+  $('readySave').classList.toggle('primary', !canShareFiles);
+  openSheet('readySheet');
+}
+$('readyShare').onclick = async () => {
+  if (!readyFile) return;
+  const file = new File([readyFile.bytes], readyFile.name, { type: 'application/pdf' });
+  try { await navigator.share({ files: [file], title: readyFile.name }); closeSheets(); }
+  catch (e) { if (e && e.name !== 'AbortError') toast('השיתוף לא הצליח. אפשר לשמור את הקובץ במקום זאת.', 4000); }
+};
+$('readySave').onclick = () => {
+  if (!readyFile) return;
+  saveBytes(readyFile.bytes, readyFile.name);
+  closeSheets();
+  toast(IOS ? 'אם נפתחה תצוגה של הקובץ: לחצו על שיתוף ⬆ ואז "שמירה בקבצים".' : `הקובץ "${readyFile.name}" ירד`, 5000);
 };
 

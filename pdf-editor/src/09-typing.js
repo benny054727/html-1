@@ -9,6 +9,7 @@ function startInline(o, selectAll) {
   if (!ta) return;
   ta.focus({ preventScroll: true });
   if (selectAll) ta.select(); else ta.setSelectionRange(ta.value.length, ta.value.length);
+  setTimeout(keepTypingVisible, 350);           // after the keyboard has opened
 }
 function updateInline(o) {
   const stage = $('stage'), s = ed.scale;
@@ -66,6 +67,7 @@ function onInlineInput(e) {
   $('edText').value = o.text; growText();
   updateInline(o);
   positionFmtBar();
+  keepTypingVisible();
 }
 /* The top field mirrors the selected text; once that text is let go, the field is cleared so the next tap starts fresh */
 function releaseField(o) { if (o && $('edText').value === o.text) { $('edText').value = ''; growText(); } }

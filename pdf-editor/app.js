@@ -1,6 +1,14 @@
 (() => {
 'use strict';
 const $ = (id) => document.getElementById(id);
+/* iPhone and iPad (iPadOS reports itself as a Mac with touch) */
+const IOS = /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+if (IOS) {
+  document.documentElement.classList.add('ios');
+  // Safari zooms the whole page when a text box is focused; this stops that (people can still pinch to zoom)
+  const vp = document.querySelector('meta[name="viewport"]');
+  if (vp && !/maximum-scale/.test(vp.content)) vp.content += ', maximum-scale=1';
+}
 pdfjsLib.GlobalWorkerOptions.workerSrc = 'vendor/pdf.worker.min.js';
 const { PDFDocument, degrees, rgb, StandardFonts } = PDFLib;
 
@@ -1245,6 +1253,8 @@ async function exportPages(pages, name) {
   busy(true, `מכין קובץ עם ${pages.length} עמודים…`);
   try {
     const { bytes, before, locked } = await makeFile(pages);
+    // iPhone: saving and sharing must start from a tap, so the finished file waits on a "ready" sheet
+    if (IOS) { busy(false); offerFile(bytes, name, before); return; }
     saveBytes(bytes, name);
     if (locked) setTimeout(() => toast('הקובץ נעול בסיסמה. בלי הסיסמה אי אפשר לפתוח אותו, אז כדאי לשמור אותה.', 5500), 5200);
     toast(before && before > bytes.length
@@ -1905,6 +1915,7 @@ function startInline(o, selectAll) {
   if (!ta) return;
   ta.focus({ preventScroll: true });
   if (selectAll) ta.select(); else ta.setSelectionRange(ta.value.length, ta.value.length);
+  setTimeout(keepTypingVisible, 350);           // after the keyboard has opened
 }
 function updateInline(o) {
   const stage = $('stage'), s = ed.scale;
@@ -1962,6 +1973,7 @@ function onInlineInput(e) {
   $('edText').value = o.text; growText();
   updateInline(o);
   positionFmtBar();
+  keepTypingVisible();
 }
 /* The top field mirrors the selected text; once that text is let go, the field is cleared so the next tap starts fresh */
 function releaseField(o) { if (o && $('edText').value === o.text) { $('edText').value = ''; growText(); } }
@@ -2758,7 +2770,37 @@ $('shareBtn').onclick = async () => {
   const name = outName();
   const file = new File([bytes], name, { type: 'application/pdf' });
   try { await navigator.share({ files: [file], title: name }); }
-  catch (e) { if (e && e.name !== 'AbortError') { saveBytes(bytes, name); toast('השיתוף לא זמין כאן, אז הקובץ ירד למכשיר.', 4500); } }
+  catch (e) {
+    if (e && e.name === 'AbortError') return;
+    // the browser allows the share sheet only right after a tap; preparing the file took too long, so ask for one more tap
+    offerFile(bytes, name);
+  }
+};
+
+/* ---------- "Your file is ready" ----------
+   Used on iPhone for every download, and anywhere a share was refused because it did not follow a tap.
+   Both buttons act inside the user's tap, which is what iOS requires. */
+let readyFile = null;
+function offerFile(bytes, name, before) {
+  readyFile = { bytes, name };
+  $('readyName').textContent = name;
+  $('readyMeta').textContent = before && before > bytes.length ? `${mb(before)} ← ${mb(bytes.length)}` : mb(bytes.length);
+  $('readyShare').hidden = !canShareFiles;
+  $('readyHint').hidden = !canShareFiles;
+  $('readySave').classList.toggle('primary', !canShareFiles);
+  openSheet('readySheet');
+}
+$('readyShare').onclick = async () => {
+  if (!readyFile) return;
+  const file = new File([readyFile.bytes], readyFile.name, { type: 'application/pdf' });
+  try { await navigator.share({ files: [file], title: readyFile.name }); closeSheets(); }
+  catch (e) { if (e && e.name !== 'AbortError') toast('השיתוף לא הצליח. אפשר לשמור את הקובץ במקום זאת.', 4000); }
+};
+$('readySave').onclick = () => {
+  if (!readyFile) return;
+  saveBytes(readyFile.bytes, readyFile.name);
+  closeSheets();
+  toast(IOS ? 'אם נפתחה תצוגה של הקובץ: לחצו על שיתוף ⬆ ואז "שמירה בקבצים".' : `הקובץ "${readyFile.name}" ירד`, 5000);
 };
 
 /* ---------- Passwords ----------
@@ -3034,6 +3076,21 @@ $('installMenuBtn').onclick = promptInstall;
 // iPhone and iPad have no install prompt: explain the Share menu instead
 if (/iphone|ipad|ipod/i.test(navigator.userAgent) && !standalone()) $('iosHint').hidden = false;
 
+/* ---------- iPhone: pinch and keyboard ----------
+   In the editor a two-finger pinch zooms the page only (Safari would also zoom the whole app). */
+['gesturestart', 'gesturechange', 'gestureend'].forEach(t => document.addEventListener(t, (e) => { if (edActive()) e.preventDefault(); }, { passive: false }));
+/* The iPhone keyboard covers the bottom of the screen without resizing it: keep the text being typed in view */
+function keepTypingVisible() {
+  const vv = window.visualViewport, el = ed.inline && $('stage').querySelector('.ov.inline');
+  if (!vv || !el || !edActive()) return;
+  const r = el.getBoundingClientRect(), body = $('edBody').getBoundingClientRect();
+  const bottom = Math.min(body.bottom, vv.offsetTop + vv.height) - 16, top = body.top + 60;
+  if (r.bottom > bottom) $('edBody').scrollTop += r.bottom - bottom;
+  else if (r.top < top) $('edBody').scrollTop -= top - r.top;
+  positionFmtBar();
+}
+if (window.visualViewport) { visualViewport.addEventListener('resize', keepTypingVisible); visualViewport.addEventListener('scroll', keepTypingVisible); }
+
 /* Test hook: the automated tests (tests/run.mjs) reach a few pure helpers when the page is opened with #selftest */
-if (location.hash === '#selftest') window.__mypdf = { bidiRuns, isHebrew, paperName, pageNumberText, pagesText, looksLikePdf, escapeHtml, fieldSize };
+if (location.hash === '#selftest') window.__mypdf = { IOS, bidiRuns, isHebrew, paperName, pageNumberText, pagesText, looksLikePdf, escapeHtml, fieldSize };
 })();

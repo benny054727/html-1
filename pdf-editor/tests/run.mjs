@@ -17,7 +17,9 @@ const require = createRequire(import.meta.url);
 const playwright = require('playwright');
 const { chromium, devices } = playwright;
 const ENGINE = process.env.BROWSER === 'webkit' ? 'webkit' : 'chromium';
-const DEVICE = ENGINE === 'webkit' ? devices['iPhone 14'] : devices['Pixel 7'];
+// DEVICE=iphone checks the iPhone code paths in Chromium too (quick local check; the real engine is BROWSER=webkit)
+const IPHONE = ENGINE === 'webkit' || process.env.DEVICE === 'iphone';
+const DEVICE = IPHONE ? devices['iPhone 14'] : devices['Pixel 7'];
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const only = process.argv[2] || '';
 
@@ -34,7 +36,7 @@ const tmp = await mkdtemp(join(tmpdir(), 'mypdf-test-'));
 const browser = await playwright[ENGINE].launch();
 // test PDFs with Hebrew text are printed by Chromium (only Chromium can print to PDF)
 const printer = ENGINE === 'chromium' ? browser : await chromium.launch();
-console.log(`engine: ${ENGINE} (${ENGINE === 'webkit' ? 'iPhone 14' : 'Pixel 7'})`);
+console.log(`engine: ${ENGINE} (${IPHONE ? 'iPhone 14' : 'Pixel 7'})`);
 
 /* ---------- helpers ---------- */
 let errors = [];
@@ -65,7 +67,12 @@ async function download(page, { size = 'none', lock = '', secure = false } = {})
   await page.selectOption('#dlSize', size);
   if (lock) { await page.check('#dlLock'); await page.fill('#dlPw', lock); } else await page.uncheck('#dlLock');
   if (await page.isVisible('#dlSecureRow')) { if (secure) await page.check('#dlSecure'); else await page.uncheck('#dlSecure'); }
-  const [d] = await Promise.all([page.waitForEvent('download', { timeout: 60000 }), page.click('#dlAllBtn')]);
+  const dl = page.waitForEvent('download', { timeout: 60000 });
+  await page.click('#dlAllBtn');
+  // iPhone: the finished file waits on a "ready" sheet, because saving must start from a tap
+  const ready = await Promise.race([dl.then(() => false), page.waitForSelector('#readySheet[open]', { timeout: 60000 }).then(() => true).catch(() => false)]);
+  if (ready) await page.click('#readySave');
+  const d = await dl;
   const file = join(tmp, `out-${Date.now()}-${Math.random().toString(36).slice(2)}.pdf`);
   await d.saveAs(file);
   return file;
@@ -303,15 +310,34 @@ test('resume: "continue" returns to the same page, mode and zoom in the editor',
   await ctx.close();
 });
 
+test('iphone: no zoom on text boxes, "file ready" sheet, launch screens', async () => {
+  const { ctx, page } = await open();
+  const ios = await page.evaluate(() => document.documentElement.classList.contains('ios'));
+  const vp = await page.getAttribute('meta[name="viewport"]', 'content');
+  if (!ios) { assert(!vp.includes('maximum-scale'), 'Android keeps pinch zoom of the page'); await ctx.close(); return 'only on iPhone'; }
+  assert(vp.includes('maximum-scale=1'), 'iPhone: no automatic zoom when typing: ' + vp);
+  assert(await page.$$eval('link[rel="apple-touch-startup-image"]', e => e.length) === 10, 'launch screens for 10 iPhone sizes');
+  await page.click('#sampleBtn'); await page.waitForSelector('.card canvas'); await page.waitForTimeout(300);
+  await toEditor(page);
+  const size = await page.$eval('#edText', e => parseFloat(getComputedStyle(e).fontSize));
+  assert(size >= 16, 'text box is at least 16px on iPhone: ' + size);
+  await page.click('.tab[data-tab="pages"]'); await page.click('#downloadBtn'); await page.selectOption('#dlSize', 'none');
+  await page.click('#dlAllBtn'); await page.waitForSelector('#readySheet[open]', { timeout: 30000 });
+  assert((await page.textContent('#readyName')).endsWith('.pdf'), 'ready sheet names the file');
+  const [d] = await Promise.all([page.waitForEvent('download'), page.click('#readySave')]);
+  assert((await readPdf(page, await (async () => { const f = join(tmp, 'ready.pdf'); await d.saveAs(f); return f; })())).pages === 4, 'saved file has 4 pages');
+  await ctx.close();
+});
+
 /* ---------- run ---------- */
 let failed = 0;
 for (const t of tests.filter(t => t.name.includes(only))) {
   errors = [];
   const t0 = Date.now();
   try {
-    await t.fn();
+    const note = await t.fn();
     if (errors.length) throw new Error('browser errors:\n    ' + errors.join('\n    '));
-    console.log(`✓ ${t.name} (${((Date.now() - t0) / 1000).toFixed(1)}s)`);
+    console.log(`✓ ${t.name} (${((Date.now() - t0) / 1000).toFixed(1)}s)${typeof note === 'string' ? ' – ' + note : ''}`);
   } catch (e) { failed++; console.log(`✗ ${t.name}\n    ${e.message}`); }
 }
 await browser.close(); if (printer !== browser) await printer.close(); server.close();

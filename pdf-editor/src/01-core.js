@@ -1,4 +1,12 @@
 const $ = (id) => document.getElementById(id);
+/* iPhone and iPad (iPadOS reports itself as a Mac with touch) */
+const IOS = /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+if (IOS) {
+  document.documentElement.classList.add('ios');
+  // Safari zooms the whole page when a text box is focused; this stops that (people can still pinch to zoom)
+  const vp = document.querySelector('meta[name="viewport"]');
+  if (vp && !/maximum-scale/.test(vp.content)) vp.content += ', maximum-scale=1';
+}
 pdfjsLib.GlobalWorkerOptions.workerSrc = 'vendor/pdf.worker.min.js';
 const { PDFDocument, degrees, rgb, StandardFonts } = PDFLib;
 
