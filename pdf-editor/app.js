@@ -574,14 +574,58 @@ let view = 'pages';
 let selecting = false;
 const edActive = () => view === 'edit';
 function showView(v) {
+  const was = view;
   view = v;
   $('pagesView').hidden = v !== 'pages';
   $('editView').hidden = v !== 'edit';
   document.querySelectorAll('.tab').forEach(t => t.dataset.tab === v ? t.setAttribute('aria-current', 'page') : t.removeAttribute('aria-current'));
   positionFmtBar();
+  if (v === 'edit' && was !== 'edit') pushLayer('edit');
+  if (v !== 'edit' && was === 'edit') popLayer('edit');
 }
+
+/* ---------- The phone's back button ----------
+   Each layer the user opens (the editor, a sheet, choosing pages, the tour) adds a step to the
+   browser history, so "back" closes the top layer instead of leaving the app. When a layer is
+   closed on screen, its history step is removed again. */
+const nav = { stack: [], ignore: 0, closing: false };
+function pushLayer(name) {
+  nav.stack.push(name);
+  try { window.history.pushState({ mypdf: nav.stack.length }, ''); } catch (_) {}
+}
+function popLayer(name) {
+  if (nav.closing) return;
+  const i = nav.stack.lastIndexOf(name); if (i < 0) return;
+  nav.stack.splice(i, 1);
+  nav.ignore++;
+  window.history.back();
+}
+function closeLayer(top) {
+  if (top === 'sheet') {
+    const open = [...document.querySelectorAll('dialog[open]')];
+    open.forEach(d => { d.dataset.navClosed = '1'; d.close(); });
+    return open.length > 0;
+  }
+  if (top === 'edit') { if (!edActive()) return false; leaveEditor(); return true; }
+  if (top === 'select') { if (!selecting) return false; stopSelecting(); return true; }
+  if (top === 'tour') { if (tourStep < 0) return false; endTour(); return true; }
+  return false;
+}
+window.addEventListener('popstate', () => {
+  if (nav.ignore > 0) { nav.ignore--; return; }
+  const top = nav.stack.pop(); if (!top) return;
+  nav.closing = true;
+  let done = false;
+  try { done = closeLayer(top); } finally { nav.closing = false; }
+  // that layer was already gone (closed another way): use this back press for the next one
+  if (!done && nav.stack.length) window.history.back();
+});
 function closeSheets() { document.querySelectorAll('dialog[open]').forEach(d => d.close()); }
-function openSheet(id) { closeSheets(); $(id).showModal(); }
+function openSheet(id) { closeSheets(); $(id).showModal(); pushLayer('sheet'); }
+document.querySelectorAll('dialog').forEach(d => d.addEventListener('close', () => {
+  if (d.dataset.navClosed) { delete d.dataset.navClosed; return; }   // closed by the back button
+  popLayer('sheet');
+}));
 document.querySelectorAll('.sheet-dlg').forEach(d => {
   // tap on the dimmed backdrop or on a close button closes the sheet
   d.addEventListener('click', (e) => { if (e.target === d || e.target.closest('[data-close]')) d.close(); });
@@ -732,11 +776,12 @@ $('pageSheet').addEventListener('click', (e) => {
   }
 });
 function startSelecting(id) {
+  if (!selecting) pushLayer('select');
   selecting = true; state.selected.clear();
   if (id != null) state.selected.add(id);
   renderGrid();
 }
-function stopSelecting() { selecting = false; state.selected.clear(); renderGrid(); }
+function stopSelecting() { if (selecting) popLayer('select'); selecting = false; state.selected.clear(); renderGrid(); }
 
 /* ---------- Page actions ---------- */
 const pagesText = (n) => n === 1 ? 'עמוד אחד' : `${n} עמודים`;
@@ -2796,8 +2841,8 @@ const TOUR = [
   { el: () => $('downloadBtn'), title: 'סיימת?', text: 'הורדה או שיתוף לוואטסאפ ולמייל, עם אפשרות להקטין את הקובץ ולנעול אותו בסיסמה.' },
 ];
 let tourStep = -1;
-function startTour() { closeSheets(); if (edActive()) leaveEditor(); tourStep = 0; $('tour').hidden = false; showTourStep(); }
-function endTour() { tourStep = -1; $('tour').hidden = true; prefs.tourDone = true; savePrefs(); }
+function startTour() { closeSheets(); if (edActive()) leaveEditor(); if (tourStep < 0) pushLayer('tour'); tourStep = 0; $('tour').hidden = false; showTourStep(); }
+function endTour() { if (tourStep >= 0) popLayer('tour'); tourStep = -1; $('tour').hidden = true; prefs.tourDone = true; savePrefs(); }
 function showTourStep() {
   const st = TOUR[tourStep], el = st && st.el();
   if (!st) { endTour(); return; }
@@ -2852,13 +2897,33 @@ function sessionData() {
     pages: state.pages,
     forms: state.forms,
     settings: Object.fromEntries(SETTING_IDS.map(id => [id, $(id).type === 'checkbox' ? $(id).checked : $(id).value])),
+    ui: uiState(),
   };
 }
-async function autosave() {
+/* Where the user is: screen, page, editing mode, zoom and scroll position */
+function uiState() {
+  const editing = edActive() && ed.pid != null;
+  return {
+    view: editing ? 'edit' : 'pages', pid: editing ? ed.pid : null,
+    mode: ['text', 'edit', 'erase'].includes(ed.mode) ? ed.mode : 'text',
+    zoom: ed.zoom, sl: $('edBody').scrollLeft, st: $('edBody').scrollTop,
+    gridTop: $('pagesView').scrollTop,
+  };
+}
+async function restoreUi(ui) {
+  if (!ui) return;
+  if (ui.view === 'edit' && state.pages.some(p => p.id === ui.pid)) {
+    await openEditor(ui.pid);
+    if (ui.mode && ui.mode !== ed.mode) setMode(ui.mode);
+    if (ui.zoom && ui.zoom !== ed.zoom) { ed.zoom = clampZoom(ui.zoom); layoutEditor(); scheduleRender(); }
+    requestAnimationFrame(() => { $('edBody').scrollLeft = ui.sl || 0; $('edBody').scrollTop = ui.st || 0; positionFmtBar(); });
+  } else requestAnimationFrame(() => { $('pagesView').scrollTop = ui.gridTop || 0; });
+}
+async function autosave(force) {
   if (restoring) return;
   const data = sessionData();
-  const sig = JSON.stringify([data.fileName, data.sources, data.pages, data.settings, data.forms]);
-  if (sig === savedSig) return;
+  const sig = JSON.stringify([data.fileName, data.sources, data.pages, data.settings, data.forms, data.ui.view, data.ui.pid, data.ui.mode]);
+  if (sig === savedSig && force !== true) return;
   savedSig = sig;
   saveState = 'saving'; showSaveState();
   if (!state.pages.length) { persisted.clear(); await store.clear('session'); await store.clear('files'); await store.clear('assets'); }
@@ -2879,8 +2944,9 @@ function showSaveState() {
   meta.appendChild(sp);
 }
 setInterval(autosave, 1500);
-document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') autosave(); });
-window.addEventListener('pagehide', autosave);
+// leaving the app: save everything now, including zoom and scroll position
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') autosave(true); });
+window.addEventListener('pagehide', () => autosave(true));
 // ask the browser not to clear this storage when space runs low
 try { navigator.storage && navigator.storage.persist && navigator.storage.persist(); } catch (_) {}
 
@@ -2893,7 +2959,9 @@ async function checkSession() {
   const mins = Math.round((Date.now() - rec.at) / 60000);
   const when = mins < 1 ? 'עכשיו' : mins < 60 ? `לפני ${mins} דקות` : mins < 1440 ? `לפני ${Math.round(mins / 60)} שעות` : `לפני ${Math.round(mins / 1440)} ימים`;
   $('resumeName').textContent = (rec.fileName || 'מסמך').replace(/\.pdf$/i, '');
-  $('resumeMeta').textContent = `${pagesText(rec.pages.length)} · נשמר ${when}`;
+  const at = rec.ui && rec.ui.view === 'edit' ? rec.pages.findIndex(p => p.id === rec.ui.pid) : -1;
+  $('resumeMeta').textContent = `${pagesText(rec.pages.length)} · נשמר ${when}` + (at >= 0 ? ` · בעריכה, עמוד ${at + 1}` : '');
+  $('resumeBtn').textContent = at >= 0 ? 'המשך עריכה' : 'המשך עבודה';
   $('resumeCard').hidden = false;
 }
 async function restoreSession(rec) {
@@ -2926,7 +2994,8 @@ async function restoreSession(rec) {
     $('resumeCard').hidden = true; pendingSession = null;
     onSettings();
     renderGrid();
-    toast('המסמך נפתח מאיפה שעצרת');
+    await restoreUi(rec.ui);
+    toast(rec.ui && rec.ui.view === 'edit' ? 'חזרת לעריכה בדיוק איפה שעצרת' : 'המסמך נפתח מאיפה שעצרת');
   } catch (e) {
     console.warn(e);
     state.sources = []; state.pages = [];

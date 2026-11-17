@@ -3,14 +3,58 @@ let view = 'pages';
 let selecting = false;
 const edActive = () => view === 'edit';
 function showView(v) {
+  const was = view;
   view = v;
   $('pagesView').hidden = v !== 'pages';
   $('editView').hidden = v !== 'edit';
   document.querySelectorAll('.tab').forEach(t => t.dataset.tab === v ? t.setAttribute('aria-current', 'page') : t.removeAttribute('aria-current'));
   positionFmtBar();
+  if (v === 'edit' && was !== 'edit') pushLayer('edit');
+  if (v !== 'edit' && was === 'edit') popLayer('edit');
 }
+
+/* ---------- The phone's back button ----------
+   Each layer the user opens (the editor, a sheet, choosing pages, the tour) adds a step to the
+   browser history, so "back" closes the top layer instead of leaving the app. When a layer is
+   closed on screen, its history step is removed again. */
+const nav = { stack: [], ignore: 0, closing: false };
+function pushLayer(name) {
+  nav.stack.push(name);
+  try { window.history.pushState({ mypdf: nav.stack.length }, ''); } catch (_) {}
+}
+function popLayer(name) {
+  if (nav.closing) return;
+  const i = nav.stack.lastIndexOf(name); if (i < 0) return;
+  nav.stack.splice(i, 1);
+  nav.ignore++;
+  window.history.back();
+}
+function closeLayer(top) {
+  if (top === 'sheet') {
+    const open = [...document.querySelectorAll('dialog[open]')];
+    open.forEach(d => { d.dataset.navClosed = '1'; d.close(); });
+    return open.length > 0;
+  }
+  if (top === 'edit') { if (!edActive()) return false; leaveEditor(); return true; }
+  if (top === 'select') { if (!selecting) return false; stopSelecting(); return true; }
+  if (top === 'tour') { if (tourStep < 0) return false; endTour(); return true; }
+  return false;
+}
+window.addEventListener('popstate', () => {
+  if (nav.ignore > 0) { nav.ignore--; return; }
+  const top = nav.stack.pop(); if (!top) return;
+  nav.closing = true;
+  let done = false;
+  try { done = closeLayer(top); } finally { nav.closing = false; }
+  // that layer was already gone (closed another way): use this back press for the next one
+  if (!done && nav.stack.length) window.history.back();
+});
 function closeSheets() { document.querySelectorAll('dialog[open]').forEach(d => d.close()); }
-function openSheet(id) { closeSheets(); $(id).showModal(); }
+function openSheet(id) { closeSheets(); $(id).showModal(); pushLayer('sheet'); }
+document.querySelectorAll('dialog').forEach(d => d.addEventListener('close', () => {
+  if (d.dataset.navClosed) { delete d.dataset.navClosed; return; }   // closed by the back button
+  popLayer('sheet');
+}));
 document.querySelectorAll('.sheet-dlg').forEach(d => {
   // tap on the dimmed backdrop or on a close button closes the sheet
   d.addEventListener('click', (e) => { if (e.target === d || e.target.closest('[data-close]')) d.close(); });
@@ -161,11 +205,12 @@ $('pageSheet').addEventListener('click', (e) => {
   }
 });
 function startSelecting(id) {
+  if (!selecting) pushLayer('select');
   selecting = true; state.selected.clear();
   if (id != null) state.selected.add(id);
   renderGrid();
 }
-function stopSelecting() { selecting = false; state.selected.clear(); renderGrid(); }
+function stopSelecting() { if (selecting) popLayer('select'); selecting = false; state.selected.clear(); renderGrid(); }
 
 /* ---------- Page actions ---------- */
 const pagesText = (n) => n === 1 ? 'עמוד אחד' : `${n} עמודים`;
