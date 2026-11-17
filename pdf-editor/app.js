@@ -605,6 +605,8 @@ function popLayer(name) {
   if (nav.closing) return;
   const i = nav.stack.lastIndexOf(name); if (i < 0) return;
   nav.stack.splice(i, 1);
+  // only step back over a step this app added: never out of the app, even if the count is off
+  if (!(window.history.state && window.history.state.mypdf)) return;
   nav.ignore++;
   window.history.back();
 }

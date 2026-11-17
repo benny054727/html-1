@@ -40,10 +40,12 @@ console.log(`engine: ${ENGINE} (${IPHONE ? 'iPhone 14' : 'Pixel 7'})`);
 
 /* ---------- helpers ---------- */
 let errors = [];
+let openPages = [];
 async function open(opts = {}) {
   const { hash, tour, ...ctxOpts } = opts;
   const ctx = await browser.newContext({ ...DEVICE, acceptDownloads: true, serviceWorkers: 'block', ...ctxOpts });
   const page = await ctx.newPage();
+  openPages.push(page);
   // the intro tour is tested on its own; elsewhere it is marked as seen
   if (!opts.tour) await page.addInitScript(() => { try { localStorage.setItem('dafdaf.prefs', JSON.stringify({ tourDone: true })); } catch (_) {} });
   page.on('pageerror', e => errors.push('pageerror: ' + e.message));
@@ -332,13 +334,24 @@ test('iphone: no zoom on text boxes, "file ready" sheet, launch screens', async 
 /* ---------- run ---------- */
 let failed = 0;
 for (const t of tests.filter(t => t.name.includes(only))) {
-  errors = [];
+  errors = []; openPages = [];
   const t0 = Date.now();
   try {
     const note = await t.fn();
     if (errors.length) throw new Error('browser errors:\n    ' + errors.join('\n    '));
     console.log(`✓ ${t.name} (${((Date.now() - t0) / 1000).toFixed(1)}s)${typeof note === 'string' ? ' – ' + note : ''}`);
-  } catch (e) { failed++; console.log(`✗ ${t.name}\n    ${e.message}`); }
+  } catch (e) {
+    failed++; console.log(`✗ ${t.name}\n    ${e.message}`);
+    for (const p of openPages) {        // where was each page when it failed
+      try {
+        const info = await p.evaluate(() => ({ url: location.href, history: history.length, state: JSON.stringify(history.state),
+          app: !document.getElementById('app').hidden, home: !document.getElementById('home').hidden,
+          editor: !document.getElementById('editView').hidden, selecting: !document.getElementById('selbar').hidden,
+          dialogs: [...document.querySelectorAll('dialog[open]')].map(d => d.id).join(',') }));
+        console.log('    page:', JSON.stringify(info));
+      } catch (err) { try { console.log('    page url:', p.url(), '(app not running there:', err.message.split('\n')[0] + ')'); } catch (_) {} }
+    }
+  }
 }
 await browser.close(); if (printer !== browser) await printer.close(); server.close();
 console.log(failed ? `\n${failed} test(s) failed` : '\nall tests passed');
