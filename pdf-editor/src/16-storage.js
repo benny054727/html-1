@@ -30,13 +30,33 @@ function sessionData() {
     pages: state.pages,
     forms: state.forms,
     settings: Object.fromEntries(SETTING_IDS.map(id => [id, $(id).type === 'checkbox' ? $(id).checked : $(id).value])),
+    ui: uiState(),
   };
 }
-async function autosave() {
+/* Where the user is: screen, page, editing mode, zoom and scroll position */
+function uiState() {
+  const editing = edActive() && ed.pid != null;
+  return {
+    view: editing ? 'edit' : 'pages', pid: editing ? ed.pid : null,
+    mode: ['text', 'edit', 'erase'].includes(ed.mode) ? ed.mode : 'text',
+    zoom: ed.zoom, sl: $('edBody').scrollLeft, st: $('edBody').scrollTop,
+    gridTop: $('pagesView').scrollTop,
+  };
+}
+async function restoreUi(ui) {
+  if (!ui) return;
+  if (ui.view === 'edit' && state.pages.some(p => p.id === ui.pid)) {
+    await openEditor(ui.pid);
+    if (ui.mode && ui.mode !== ed.mode) setMode(ui.mode);
+    if (ui.zoom && ui.zoom !== ed.zoom) { ed.zoom = clampZoom(ui.zoom); layoutEditor(); scheduleRender(); }
+    requestAnimationFrame(() => { $('edBody').scrollLeft = ui.sl || 0; $('edBody').scrollTop = ui.st || 0; positionFmtBar(); });
+  } else requestAnimationFrame(() => { $('pagesView').scrollTop = ui.gridTop || 0; });
+}
+async function autosave(force) {
   if (restoring) return;
   const data = sessionData();
-  const sig = JSON.stringify([data.fileName, data.sources, data.pages, data.settings, data.forms]);
-  if (sig === savedSig) return;
+  const sig = JSON.stringify([data.fileName, data.sources, data.pages, data.settings, data.forms, data.ui.view, data.ui.pid, data.ui.mode]);
+  if (sig === savedSig && force !== true) return;
   savedSig = sig;
   saveState = 'saving'; showSaveState();
   if (!state.pages.length) { persisted.clear(); await store.clear('session'); await store.clear('files'); await store.clear('assets'); }
@@ -57,8 +77,9 @@ function showSaveState() {
   meta.appendChild(sp);
 }
 setInterval(autosave, 1500);
-document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') autosave(); });
-window.addEventListener('pagehide', autosave);
+// leaving the app: save everything now, including zoom and scroll position
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') autosave(true); });
+window.addEventListener('pagehide', () => autosave(true));
 // ask the browser not to clear this storage when space runs low
 try { navigator.storage && navigator.storage.persist && navigator.storage.persist(); } catch (_) {}
 
@@ -71,7 +92,9 @@ async function checkSession() {
   const mins = Math.round((Date.now() - rec.at) / 60000);
   const when = mins < 1 ? 'עכשיו' : mins < 60 ? `לפני ${mins} דקות` : mins < 1440 ? `לפני ${Math.round(mins / 60)} שעות` : `לפני ${Math.round(mins / 1440)} ימים`;
   $('resumeName').textContent = (rec.fileName || 'מסמך').replace(/\.pdf$/i, '');
-  $('resumeMeta').textContent = `${pagesText(rec.pages.length)} · נשמר ${when}`;
+  const at = rec.ui && rec.ui.view === 'edit' ? rec.pages.findIndex(p => p.id === rec.ui.pid) : -1;
+  $('resumeMeta').textContent = `${pagesText(rec.pages.length)} · נשמר ${when}` + (at >= 0 ? ` · בעריכה, עמוד ${at + 1}` : '');
+  $('resumeBtn').textContent = at >= 0 ? 'המשך עריכה' : 'המשך עבודה';
   $('resumeCard').hidden = false;
 }
 async function restoreSession(rec) {
@@ -104,7 +127,8 @@ async function restoreSession(rec) {
     $('resumeCard').hidden = true; pendingSession = null;
     onSettings();
     renderGrid();
-    toast('המסמך נפתח מאיפה שעצרת');
+    await restoreUi(rec.ui);
+    toast(rec.ui && rec.ui.view === 'edit' ? 'חזרת לעריכה בדיוק איפה שעצרת' : 'המסמך נפתח מאיפה שעצרת');
   } catch (e) {
     console.warn(e);
     state.sources = []; state.pages = [];

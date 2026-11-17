@@ -243,6 +243,56 @@ test('autosave: work comes back after closing the app', async () => {
   await ctx.close();
 });
 
+test('back button: closes the top layer and never leaves the app from the editor', async () => {
+  const { ctx, page } = await open();
+  await page.click('#sampleBtn'); await page.waitForSelector('.card canvas'); await page.waitForTimeout(300);
+  const back = async () => { await page.evaluate(() => history.back()); await page.waitForTimeout(350); };
+  await page.click('.card:nth-child(2) .thumb'); await page.click('#pageSheet [data-act="edit"]'); await page.waitForSelector('#stage canvas');
+  await page.click('#downloadBtn'); await page.waitForSelector('#dlSheet[open]');
+  await back();
+  assert(!(await page.isVisible('#dlSheet[open]')) && await page.isVisible('#editView'), 'back closes the sheet and stays in the editor');
+  await page.click('.tab[data-tab="insert"]'); await page.waitForSelector('#insertSheet[open]');
+  await page.click('#insertSheet [data-close]'); await page.waitForTimeout(200);     // closed on screen: no extra step left behind
+  await back();
+  assert(await page.isVisible('#pagesView') && !(await page.isVisible('#editView')), 'back leaves the editor to the pages');
+  assert(await page.isVisible('#app') && page.url().includes('index.html'), 'still in the app');
+  // choosing pages
+  const bb = await page.locator('.card:nth-child(1) .thumb').boundingBox();
+  await page.mouse.move(bb.x + 20, bb.y + 20); await page.mouse.down(); await page.waitForTimeout(650); await page.mouse.up();
+  assert(await page.isVisible('#selbar'), 'selection started');
+  await back();
+  assert(!(await page.isVisible('#selbar')) && await page.isVisible('#tabbar'), 'back ends the selection');
+  // into the editor with the tab, out with the tab, then back must not bring the editor back
+  await page.click('.tab[data-tab="edit"]'); await page.waitForSelector('#stage canvas');
+  await page.click('.tab[data-tab="pages"]'); await page.waitForTimeout(400);
+  assert(await page.isVisible('#pagesView'), 'pages after the tab');
+  await ctx.close();
+});
+
+test('resume: "continue" returns to the same page, mode and zoom in the editor', async () => {
+  const { ctx, page } = await open();
+  await page.click('#sampleBtn'); await page.waitForSelector('.card canvas'); await page.waitForTimeout(300);
+  await page.click('.card:nth-child(3) .thumb'); await page.click('#pageSheet [data-act="edit"]'); await page.waitForSelector('#stage canvas');
+  await page.click('#edModes [data-mode=erase]');
+  await page.click('#zoomIn'); await page.click('#zoomIn'); await page.waitForTimeout(300);
+  const zoom = await page.textContent('#zoomLabel');
+  await page.evaluate(() => window.dispatchEvent(new Event('pagehide')));       // what the phone does when the app is left
+  await page.waitForTimeout(1200);
+  await page.close();
+  const p2 = await ctx.newPage(); await p2.goto(URL_APP); await p2.waitForTimeout(600);
+  const meta = await p2.textContent('#resumeMeta');
+  assert(meta.includes('בעריכה, עמוד 3'), 'card says where the user was: ' + meta);
+  assert((await p2.textContent('#resumeBtn')).includes('המשך עריכה'), 'button says continue editing');
+  await p2.click('#resumeBtn'); await p2.waitForSelector('#stage canvas'); await p2.waitForTimeout(500);
+  assert(await p2.isVisible('#editView'), 'back in the editor');
+  assert((await p2.textContent('#edTitle')).includes('עמוד 3'), 'same page: ' + await p2.textContent('#edTitle'));
+  assert(await p2.getAttribute('#edModes [data-mode=erase]', 'aria-pressed') === 'true', 'same mode (erase)');
+  assert(await p2.textContent('#zoomLabel') === zoom, `same zoom (${zoom})`);
+  await p2.evaluate(() => history.back()); await p2.waitForTimeout(400);
+  assert(await p2.isVisible('#pagesView'), 'back from the restored editor goes to the pages');
+  await ctx.close();
+});
+
 /* ---------- run ---------- */
 let failed = 0;
 for (const t of tests.filter(t => t.name.includes(only))) {

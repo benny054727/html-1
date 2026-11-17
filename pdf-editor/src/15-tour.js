@@ -9,8 +9,8 @@ const TOUR = [
   { el: () => $('downloadBtn'), title: 'סיימת?', text: 'הורדה או שיתוף לוואטסאפ ולמייל, עם אפשרות להקטין את הקובץ ולנעול אותו בסיסמה.' },
 ];
 let tourStep = -1;
-function startTour() { closeSheets(); if (edActive()) leaveEditor(); tourStep = 0; $('tour').hidden = false; showTourStep(); }
-function endTour() { tourStep = -1; $('tour').hidden = true; prefs.tourDone = true; savePrefs(); }
+function startTour() { closeSheets(); if (edActive()) leaveEditor(); if (tourStep < 0) pushLayer('tour'); tourStep = 0; $('tour').hidden = false; showTourStep(); }
+function endTour() { if (tourStep >= 0) popLayer('tour'); tourStep = -1; $('tour').hidden = true; prefs.tourDone = true; savePrefs(); }
 function showTourStep() {
   const st = TOUR[tourStep], el = st && st.el();
   if (!st) { endTour(); return; }
