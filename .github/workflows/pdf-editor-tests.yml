@@ -9,8 +9,17 @@ on:
 
 jobs:
   test:
+    name: ${{ matrix.name }}
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Android (Chromium)
+            browser: chromium
+          - name: iPhone (WebKit, Safari's engine)
+            browser: webkit
     defaults:
       run:
         working-directory: pdf-editor
@@ -20,5 +29,8 @@ jobs:
         with:
           node-version: 20
       - run: npm install --no-audit --no-fund
-      - run: npx playwright install --with-deps chromium
-      - run: npm test
+      - run: npx playwright install --with-deps chromium ${{ matrix.browser == 'webkit' && 'webkit' || '' }}
+      - run: node tools/build.mjs --check
+      - run: node tests/run.mjs
+        env:
+          BROWSER: ${{ matrix.browser }}

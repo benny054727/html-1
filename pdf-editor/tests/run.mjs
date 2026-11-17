@@ -1,4 +1,6 @@
 // End-to-end tests for עורך MY PDF.
+// BROWSER=webkit runs them in WebKit (the engine of Safari on iPhone) as an iPhone 14;
+// the default is Chromium as a Pixel 7 (Android).
 // Opens the app in headless Chromium, works with real PDFs (made during the test) and checks
 // the PDFs that come out, using the PDF reader inside the app.
 //   node tests/run.mjs            run everything
@@ -12,7 +14,12 @@ import { createRequire } from 'node:module';
 import { execFileSync } from 'node:child_process';
 
 const require = createRequire(import.meta.url);
-const { chromium, devices } = require('playwright');
+const playwright = require('playwright');
+const { chromium, devices } = playwright;
+const ENGINE = process.env.BROWSER === 'webkit' ? 'webkit' : 'chromium';
+// DEVICE=iphone checks the iPhone code paths in Chromium too (quick local check; the real engine is BROWSER=webkit)
+const IPHONE = ENGINE === 'webkit' || process.env.DEVICE === 'iphone';
+const DEVICE = IPHONE ? devices['iPhone 14'] : devices['Pixel 7'];
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const only = process.argv[2] || '';
 
@@ -26,14 +33,19 @@ const server = createServer(async (req, res) => {
 await new Promise(r => server.listen(0, '127.0.0.1', r));
 const URL_APP = `http://127.0.0.1:${server.address().port}/index.html`;
 const tmp = await mkdtemp(join(tmpdir(), 'mypdf-test-'));
-const browser = await chromium.launch();
+const browser = await playwright[ENGINE].launch();
+// test PDFs with Hebrew text are printed by Chromium (only Chromium can print to PDF)
+const printer = ENGINE === 'chromium' ? browser : await chromium.launch();
+console.log(`engine: ${ENGINE} (${IPHONE ? 'iPhone 14' : 'Pixel 7'})`);
 
 /* ---------- helpers ---------- */
 let errors = [];
+let openPages = [];
 async function open(opts = {}) {
   const { hash, tour, ...ctxOpts } = opts;
-  const ctx = await browser.newContext({ ...devices['Pixel 7'], acceptDownloads: true, serviceWorkers: 'block', ...ctxOpts });
+  const ctx = await browser.newContext({ ...DEVICE, acceptDownloads: true, serviceWorkers: 'block', ...ctxOpts });
   const page = await ctx.newPage();
+  openPages.push(page);
   // the intro tour is tested on its own; elsewhere it is marked as seen
   if (!opts.tour) await page.addInitScript(() => { try { localStorage.setItem('dafdaf.prefs', JSON.stringify({ tourDone: true })); } catch (_) {} });
   page.on('pageerror', e => errors.push('pageerror: ' + e.message));
@@ -57,7 +69,12 @@ async function download(page, { size = 'none', lock = '', secure = false } = {})
   await page.selectOption('#dlSize', size);
   if (lock) { await page.check('#dlLock'); await page.fill('#dlPw', lock); } else await page.uncheck('#dlLock');
   if (await page.isVisible('#dlSecureRow')) { if (secure) await page.check('#dlSecure'); else await page.uncheck('#dlSecure'); }
-  const [d] = await Promise.all([page.waitForEvent('download', { timeout: 60000 }), page.click('#dlAllBtn')]);
+  const dl = page.waitForEvent('download', { timeout: 60000 });
+  await page.click('#dlAllBtn');
+  // iPhone: the finished file waits on a "ready" sheet, because saving must start from a tap
+  const ready = await Promise.race([dl.then(() => false), page.waitForSelector('#readySheet[open]', { timeout: 60000 }).then(() => true).catch(() => false)]);
+  if (ready) await page.click('#readySave');
+  const d = await dl;
   const file = join(tmp, `out-${Date.now()}-${Math.random().toString(36).slice(2)}.pdf`);
   await d.saveAs(file);
   return file;
@@ -76,7 +93,7 @@ async function readPdf(page, file, password) {
 }
 /* Test PDFs: Hebrew text made by Chromium, everything else with the app's pdf-lib */
 async function hebrewPdf(html, name) {
-  const pg = await browser.newPage();
+  const pg = await printer.newPage();
   await pg.setContent(`<html dir="rtl"><body style="font-family:Arial;font-size:16px;padding:40px">${html}</body></html>`);
   const file = join(tmp, name); await pg.pdf({ path: file, format: 'A4' }); await pg.close();
   return file;
@@ -156,7 +173,9 @@ test('change: one word in a line, even when stored letter by letter', async () =
   const words = await page.$$eval('.ti', e => e.map(x => x.title));
   assert(words.includes('שלום') && words.includes('48213') && words.includes('ישראלי'), 'words found: ' + words.join(','));
   await page.click('.ti[title="ישראלי"]'); await page.keyboard.type('כהן');
-  await page.touchscreen.tap(20, 600);
+  // tap an empty spot on the page (relative to the page: phone screens differ in height)
+  const st = await page.locator('#stage').boundingBox();
+  await page.touchscreen.tap(st.x + 20, st.y + 230);
   const out = await readPdf(page, await download(page, { secure: true }));
   assert(!out.text.includes('ישראלי'), 'old word removed with secure delete');
   await ctx.close();
@@ -293,17 +312,47 @@ test('resume: "continue" returns to the same page, mode and zoom in the editor',
   await ctx.close();
 });
 
+test('iphone: no zoom on text boxes, "file ready" sheet, launch screens', async () => {
+  const { ctx, page } = await open();
+  const ios = await page.evaluate(() => document.documentElement.classList.contains('ios'));
+  const vp = await page.getAttribute('meta[name="viewport"]', 'content');
+  if (!ios) { assert(!vp.includes('maximum-scale'), 'Android keeps pinch zoom of the page'); await ctx.close(); return 'only on iPhone'; }
+  assert(vp.includes('maximum-scale=1'), 'iPhone: no automatic zoom when typing: ' + vp);
+  assert(await page.$$eval('link[rel="apple-touch-startup-image"]', e => e.length) === 10, 'launch screens for 10 iPhone sizes');
+  await page.click('#sampleBtn'); await page.waitForSelector('.card canvas'); await page.waitForTimeout(300);
+  await toEditor(page);
+  const size = await page.$eval('#edText', e => parseFloat(getComputedStyle(e).fontSize));
+  assert(size >= 16, 'text box is at least 16px on iPhone: ' + size);
+  await page.click('.tab[data-tab="pages"]'); await page.click('#downloadBtn'); await page.selectOption('#dlSize', 'none');
+  await page.click('#dlAllBtn'); await page.waitForSelector('#readySheet[open]', { timeout: 30000 });
+  assert((await page.textContent('#readyName')).endsWith('.pdf'), 'ready sheet names the file');
+  const [d] = await Promise.all([page.waitForEvent('download'), page.click('#readySave')]);
+  assert((await readPdf(page, await (async () => { const f = join(tmp, 'ready.pdf'); await d.saveAs(f); return f; })())).pages === 4, 'saved file has 4 pages');
+  await ctx.close();
+});
+
 /* ---------- run ---------- */
 let failed = 0;
 for (const t of tests.filter(t => t.name.includes(only))) {
-  errors = [];
+  errors = []; openPages = [];
   const t0 = Date.now();
   try {
-    await t.fn();
+    const note = await t.fn();
     if (errors.length) throw new Error('browser errors:\n    ' + errors.join('\n    '));
-    console.log(`✓ ${t.name} (${((Date.now() - t0) / 1000).toFixed(1)}s)`);
-  } catch (e) { failed++; console.log(`✗ ${t.name}\n    ${e.message}`); }
+    console.log(`✓ ${t.name} (${((Date.now() - t0) / 1000).toFixed(1)}s)${typeof note === 'string' ? ' – ' + note : ''}`);
+  } catch (e) {
+    failed++; console.log(`✗ ${t.name}\n    ${e.message}`);
+    for (const p of openPages) {        // where was each page when it failed
+      try {
+        const info = await p.evaluate(() => ({ url: location.href, history: history.length, state: JSON.stringify(history.state),
+          app: !document.getElementById('app').hidden, home: !document.getElementById('home').hidden,
+          editor: !document.getElementById('editView').hidden, selecting: !document.getElementById('selbar').hidden,
+          dialogs: [...document.querySelectorAll('dialog[open]')].map(d => d.id).join(',') }));
+        console.log('    page:', JSON.stringify(info));
+      } catch (err) { try { console.log('    page url:', p.url(), '(app not running there:', err.message.split('\n')[0] + ')'); } catch (_) {} }
+    }
+  }
 }
-await browser.close(); server.close();
+await browser.close(); if (printer !== browser) await printer.close(); server.close();
 console.log(failed ? `\n${failed} test(s) failed` : '\nall tests passed');
 process.exit(failed ? 1 : 0);
