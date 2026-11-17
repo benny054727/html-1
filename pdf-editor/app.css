@@ -676,3 +676,11 @@ input[type=search] { width: 100%; border: 1px solid var(--line); background: var
 .stage .ff-radio { border-radius: 50%; font-size: 70% !important; }
 .stage .ff.ro { opacity: .6; cursor: not-allowed; }
 .size-note { margin: 2px 0 0; font-size: 12.5px; }
+
+/* Typing on the page */
+.ov.inline { cursor: text; outline: 2px solid var(--accent); outline-offset: 2px; z-index: 4; }
+.ov-edit {
+  display: block; width: 100%; height: 100%; margin: 0; border: 0; border-radius: 0; resize: none; overflow: hidden;
+  white-space: pre; background: transparent; outline: none; caret-color: var(--accent); touch-action: auto;
+  box-sizing: border-box; padding-bottom: 0;
+}
