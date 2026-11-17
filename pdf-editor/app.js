@@ -38,7 +38,7 @@ function undo() {
   for (const id of [...state.selected]) if (!ids.has(id)) state.selected.delete(id);
   $('undoBtn').disabled = !history.length;
   renderGrid();
-  if (edActive()) { if (!edPage()) leaveEditor(); else { ed.selId = null; drawEditor(); } }
+  if (edActive()) { ed.inline = null; $('stage').querySelector('.ov.inline')?.remove(); if (!edPage()) leaveEditor(); else { ed.selId = null; drawEditor(); } }
   toast('הפעולה בוטלה');
 }
 
@@ -867,6 +867,7 @@ document.addEventListener('keydown', (e) => {
   const typing = /^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement?.tagName);
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && !typing) { e.preventDefault(); undo(); }
   if (e.key === 'Escape' && selecting && !document.querySelector('dialog[open]')) stopSelecting();
+  if (e.key === 'Escape' && typeof ed !== 'undefined' && ed.inline && !document.querySelector('dialog[open]')) { finishInline(); }
 });
 
 /* Settings panel */
@@ -1207,17 +1208,18 @@ $('dlSelBtn').onclick = exportSelected;
 $('extractBtn').onclick = exportSelected;
 
 /* ---------- Page editor: new text, edit existing text, erase area ---------- */
-const ed = { pid: null, selId: null, selRect: null, selObj: null, odrag: null, shape: 'rect', vp: null, pg: null, base: null, R: 0, scale: 1, fit: 1, zoom: 1, renderTok: 0, canvas: null, drag: null, draw: null, tap: null, pinch: null, mode: 'text', items: [] };
+const ed = { inline: null, pid: null, selId: null, selRect: null, selObj: null, odrag: null, shape: 'rect', vp: null, pg: null, base: null, R: 0, scale: 1, fit: 1, zoom: 1, renderTok: 0, canvas: null, drag: null, draw: null, tap: null, pinch: null, mode: 'text', items: [] };
 const edPage = () => state.pages.find(p => p.id === ed.pid);
 const edSel = () => edPage()?.overlays.find(o => o.id === ed.selId);
 const HINTS = {
-  text: 'כתבו טקסט בשדה למעלה ולחצו על העמוד כדי להוסיף אותו. גוררים טקסט כדי להזיז אותו.',
+  text: 'הקישו על העמוד והתחילו לכתוב. הקשה על טקסט מסמנת אותו, והקשה נוספת פותחת אותו לעריכה. גוררים כדי להזיז.',
   edit: 'בחרו אם הקשה בוחרת אות, מילה או שורה, ולחצו על הטקסט כדי לשנות אותו. סל האשפה בסרגל מחזיר את המקור.',
   erase: 'גררו מלבן על האזור שרוצים למחוק.',
 };
 
 async function openEditor(id) {
   closeSheets();
+  finishInline();
   if (selecting) { selecting = false; state.selected.clear(); }
   ed.pid = id; ed.selId = null; ed.selRect = null; cancelGestures(); ed.pinch = null; pointers.clear();
   showView('edit');
@@ -1230,6 +1232,7 @@ const DRAW_INFO = {
   mark: ['i-marker', 'הקישו על מילה כדי להדגיש אותה, או גררו על אזור'],
 };
 function setMode(m) {
+  finishInline();
   ed.mode = m; ed.selId = null; ed.selRect = null; ed.selObj = null;
   document.querySelectorAll('#edModes .mode').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.mode === m)));
   $('stage').dataset.mode = m;
@@ -1394,7 +1397,8 @@ function positionOv(el, o) {
 }
 function drawOverlays() {
   const stage = $('stage'), p = edPage(); if (!p || !ed.vp) return;
-  stage.querySelectorAll('.ov, .er, .ti, .obj, .ff').forEach(el => el.remove());
+  stage.querySelectorAll('.ov:not(.inline), .er, .ti, .obj, .ff').forEach(el => el.remove());
+  if (!ed.inline) stage.querySelector('.ov.inline')?.remove();
   const rects = p.rects || [];
   for (const r of rects) {
     const v = toView(r);
@@ -1420,6 +1424,7 @@ function drawOverlays() {
     }
   }
   for (const o of p.overlays) {
+    if (o.id === ed.inline) { updateInline(o); continue; }
     const el = document.createElement('div');
     el.className = 'ov' + (o.id === ed.selId ? ' sel' : '');
     el.dataset.id = o.id;
@@ -1597,8 +1602,7 @@ function replaceUnit(p, u) {
   p.overlays.push(o);
   ed.selId = o.id; ed.selRect = null;
   loadFields(o);
-  drawOverlays();
-  $('edText').focus(); $('edText').select();
+  startInline(o, true);
 }
 /* Keep text on a line: replaced text stays on its own baseline, other text snaps to nearby lines */
 function snapToLine(o) {
@@ -1645,7 +1649,11 @@ function startTap(e, kind, extra) {
 }
 $('stage').addEventListener('pointerdown', (e) => {
   const p = edPage(); if (!p || !ed.vp) return;
-  if (e.target.closest('.ff')) return;            // typing in a form field
+  if (e.target.closest('.ff') || e.target.closest('.ov-edit')) return;   // typing in a form field or in text on the page
+  if (ed.inline) {                                // a tap anywhere else only ends typing
+    finishInline();
+    if (!e.target.closest('.ov, .obj, .ti')) { ed.selId = null; drawOverlays(); startTap(e, 'none'); return; }
+  }
   if (e.button > 0) return;
   pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
   try { $('stage').setPointerCapture(e.pointerId); } catch (_) {}
@@ -1675,11 +1683,12 @@ $('stage').addEventListener('pointerdown', (e) => {
   const ovEl = e.target.closest('.ov');
   if (ovEl) {
     const o = p.overlays.find(x => x.id === +ovEl.dataset.id);
-    ed.selId = o.id; ed.selRect = null;
+    const wasSel = ed.selId === o.id;
+    ed.selId = o.id; ed.selRect = null; ed.selObj = null;
     loadFields(o);
     const [x, y] = ed.vp.convertToViewportPoint(o.px, o.py);
     const [mx, my] = stagePoint(e);
-    ed.drag = { o, dx: mx - x, dy: my - y, moved: false };
+    ed.drag = { o, dx: mx - x, dy: my - y, moved: false, wasSel };
     drawOverlays();
     return;
   }
@@ -1692,6 +1701,7 @@ $('stage').addEventListener('pointerdown', (e) => {
   if (tiEl && ed.mode === 'edit') { startTap(e, 'ti', { i: +tiEl.dataset.i }); return; }
   if (tiEl && ed.mode === 'mark') { startTap(e, 'mk', { i: +tiEl.dataset.i }); return; }
   if (ed.selId || ed.selRect || ed.selObj) {
+    releaseField(edSel());
     ed.selId = null; ed.selRect = null; ed.selObj = null; drawOverlays();
     if (!['erase', 'shape', 'mark'].includes(ed.mode)) { startTap(e, 'none'); return; }
   }
@@ -1752,8 +1762,7 @@ function doTap(t, e) {
     return;
   }
   if (t.kind !== 'add') return;
-  const text = $('edText').value;
-  if (!text.trim()) { toast('כתבו קודם טקסט בשדה למעלה'); $('edText').focus(); return; }
+  const text = $('edText').value.trim() ? $('edText').value : '';
   snapshot();
   const [x, y] = stagePoint(e);
   const [px, py] = ed.vp.convertToPdfPoint(x, y);
@@ -1764,6 +1773,7 @@ function doTap(t, e) {
   snapToLine(o); hideGuide();
   p.overlays.push(o);
   ed.selId = o.id;
+  if (!text) { o.fresh = true; startInline(o); return; }
   drawOverlays();
 }
 function endPointer(e) {
@@ -1775,7 +1785,8 @@ function endPointer(e) {
     if (!t.pan && e.type === 'pointerup') doTap(t, e);
     return;
   }
-  ed.drag = null;
+  const dr = ed.drag; ed.drag = null;
+  if (dr && !dr.moved && dr.wasSel && e.type === 'pointerup') { startInline(dr.o); return; }
   if (ed.odrag) { endObjDrag(); return; }
   const d = ed.draw; if (!d) return;
   ed.draw = null;
@@ -1803,6 +1814,93 @@ function endPointer(e) {
 }
 $('stage').addEventListener('pointerup', endPointer);
 $('stage').addEventListener('pointercancel', endPointer);
+
+/* ---------- Typing directly on the page ----------
+   The selected text turns into a text box drawn in the same font, size, colour and position, so
+   the user types where the text is. The text field at the top stays in sync. */
+function startInline(o, selectAll) {
+  ed.selId = o.id; ed.selRect = null; ed.selObj = null; ed.inline = o.id;
+  $('edText').value = o.text; growText();
+  drawOverlays();
+  const ta = $('stage').querySelector('.ov.inline textarea');
+  if (!ta) return;
+  ta.focus({ preventScroll: true });
+  if (selectAll) ta.select(); else ta.setSelectionRange(ta.value.length, ta.value.length);
+}
+function updateInline(o) {
+  const stage = $('stage'), s = ed.scale;
+  let el = stage.querySelector('.ov.inline');
+  if (el && +el.dataset.id !== o.id) { el.remove(); el = null; }
+  if (!el) {
+    el = document.createElement('div');
+    el.className = 'ov inline sel'; el.dataset.id = o.id;
+    const ta = document.createElement('textarea');
+    ta.className = 'ov-edit'; ta.rows = 1; ta.spellcheck = false; ta.setAttribute('aria-label', 'הטקסט');
+    ta.value = o.text;
+    ta.addEventListener('input', onInlineInput);
+    el.appendChild(ta);
+    stage.appendChild(el);
+  }
+  const ta = el.querySelector('textarea');
+  if (ta.value !== o.text) ta.value = o.text;
+  const img = ovImg(o), lines = String(o.text || ' ').split('\n').length;
+  const slack = o.size * 1.2;                          // room for the next letters while typing
+  const lh = (o.lh || 1.2) * o.size;
+  const rtl = isHebrew(o.text || '') || (!o.text && o.anchor !== 'l');
+  const align = o.align || (rtl ? 'r' : 'l');
+  Object.assign(ta.style, {
+    fontFamily: fontStack(o.font), fontWeight: String(fontWeight(o.font, o.bold)), fontSize: o.size * s + 'px',
+    lineHeight: lh * s + 'px', color: o.color, letterSpacing: (o.ls || 0) * o.size * s + 'px',
+    fontStyle: o.it ? 'italic' : 'normal', textDecoration: [o.u ? 'underline' : '', o.st ? 'line-through' : ''].join(' ').trim() || 'none',
+    textAlign: align === 'c' ? 'center' : align === 'r' ? 'right' : 'left', direction: rtl ? 'rtl' : 'ltr',
+    background: o.hl || 'transparent', opacity: String(o.op ?? 1),
+    paddingTop: Math.max(0, (o.size - (lh / 2 + o.size * 0.33))) * s + 'px', paddingLeft: img.padL * s + 'px', paddingRight: img.padR * s + 'px',
+  });
+  const w = img.w + slack, h = Math.max(img.h, lines * lh + o.size * 0.3);
+  el.style.width = w * s + 'px'; el.style.height = h * s + 'px';
+  // keep the start edge where it is: the box grows to the left in Hebrew, to the right otherwise
+  let [cx, cy] = overlayCenter(o, ed.vp, ed.R);
+  const a = ovAngle(o, ed.R) * Math.PI / 180;
+  const grow = o.anchor === 'r' ? -1 : o.anchor === 'l' ? 1 : 0;
+  const dx = grow * slack / 2 * s, dy = (h - img.h) / 2 * s;
+  cx += dx * Math.cos(a) + dy * Math.sin(a); cy += -dx * Math.sin(a) + dy * Math.cos(a);
+  el.style.left = cx + 'px'; el.style.top = cy + 'px';
+  el.style.transform = `translate(-50%, -50%) rotate(${-ovAngle(o, ed.R)}deg)`;
+}
+function onInlineInput(e) {
+  const p = edPage(), o = p && p.overlays.find(x => x.id === ed.inline); if (!o) return;
+  beginBurst();
+  // new text typed from an empty box keeps its starting edge in place
+  if (o.fresh && !o.anchor && e.target.value) {
+    const img = ovImg(o), [cx] = [o.px];
+    o.anchor = isHebrew(e.target.value) ? 'r' : 'l';
+    const half = (img.w / 2 - (o.anchor === 'l' ? img.padL : img.padR));
+    const th = o.ang * Math.PI / 180;
+    o.px = cx + (o.anchor === 'r' ? 1 : -1) * half * Math.cos(th);
+    o.py = o.py + (o.anchor === 'r' ? 1 : -1) * half * Math.sin(th);
+  }
+  o.text = e.target.value;
+  $('edText').value = o.text; growText();
+  updateInline(o);
+  positionFmtBar();
+}
+/* The top field mirrors the selected text; once that text is let go, the field is cleared so the next tap starts fresh */
+function releaseField(o) { if (o && $('edText').value === o.text) { $('edText').value = ''; growText(); } }
+function finishInline() {
+  if (typeof ed === 'undefined' || !ed.inline) return;
+  const p = edPage(), o = p && p.overlays.find(x => x.id === ed.inline);
+  ed.inline = null;
+  $('stage').querySelector('.ov.inline')?.remove();
+  if (o) {
+    delete o.fresh;
+    releaseField(o);
+    if (!o.text.trim() && o.srcItem == null) { p.overlays = p.overlays.filter(x => x !== o); ed.selId = null; $('edText').value = ''; growText(); }
+  }
+  drawOverlays();
+  renderGrid();
+}
+/* Toolbar buttons must not take the keyboard away from the text being typed */
+['fmtBar', 'objBar'].forEach(id => $(id).addEventListener('mousedown', (e) => { if (!e.target.closest('input, select')) e.preventDefault(); }));
 
 /* ---------- Text style: floating toolbar and sheets ---------- */
 function loadPrefs() {
@@ -1883,6 +1981,7 @@ $('edText').addEventListener('input', () => {
   growText();
   const o = edSel(); if (!o) return;
   beginBurst(); o.text = $('edText').value; drawOverlays();
+  const ta = $('stage').querySelector('.ov.inline textarea'); if (ta && ta.value !== o.text) ta.value = o.text;
 });
 
 /* Toolbar buttons */
@@ -2015,7 +2114,7 @@ document.addEventListener('keydown', (e) => {
     ed.selId = null; ed.selRect = null; drawOverlays();
   }
 });
-function leaveEditor() { cancelGestures(); hideGuide(); showView('pages'); renderGrid(); }
+function leaveEditor() { finishInline(); cancelGestures(); hideGuide(); showView('pages'); renderGrid(); }
 $('edPrev').onclick = () => { const n = idxOf(ed.pid); if (n > 0) openEditor(state.pages[n - 1].id); };
 $('edNext').onclick = () => { const n = idxOf(ed.pid); if (n < state.pages.length - 1) openEditor(state.pages[n + 1].id); };
 window.addEventListener('resize', () => { if (edActive() && ed.pg) { clearTimeout(ed.rt); ed.rt = setTimeout(() => { computeFit(); layoutEditor(); scheduleRender(); }, 200); } });
