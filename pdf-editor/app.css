@@ -779,3 +779,5 @@ html.ios input[type=text], html.ios input[type=search], html.ios input[type=pass
 .unsupported h1 { font-size: 22px; line-height: 1.3; }
 .about .libs { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; font-size: 14.5px; }
 .about .libs small { color: var(--muted); margin-inline-start: 6px; }
+.copyright { margin: 8px 0 0; color: var(--muted); font-size: 12.5px; letter-spacing: .01em; }
+.about .copyright { margin-top: 22px; padding-top: 12px; border-top: 1px solid var(--line); text-align: center; }
