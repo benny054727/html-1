@@ -1,0 +1,12 @@
+{
+  "name": "my-pdf-editor",
+  "private": true,
+  "description": "עורך MY PDF – Hebrew PDF editor that runs in the browser",
+  "scripts": {
+    "build": "node tools/build.mjs",
+    "test": "node tools/build.mjs --check && node tests/run.mjs"
+  },
+  "devDependencies": {
+    "playwright": "1.63.0"
+  }
+}

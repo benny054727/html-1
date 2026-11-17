@@ -2815,7 +2815,10 @@ $('tourNext').onclick = () => { tourStep++; showTourStep(); };
 $('tourSkip').onclick = endTour;
 $('tourBtn').onclick = startTour;
 window.addEventListener('resize', () => { if (tourStep >= 0) showTourStep(); });
-function maybeTour() { if (!prefs.tourDone && state.pages.length && !edActive()) setTimeout(() => { if (tourStep < 0 && !document.querySelector('dialog[open]')) startTour(); }, 900); }
+function maybeTour() {
+  // never pull the user out of the editor or a sheet they opened in the meantime
+  if (!prefs.tourDone && state.pages.length && !edActive()) setTimeout(() => { if (tourStep < 0 && !edActive() && !selecting && !document.querySelector('dialog[open]')) startTour(); }, 900);
+}
 
 /* ---------- Saving work on the device ----------
    The original files, the pages with every change, pictures and settings are kept in the browser's
@@ -2961,4 +2964,7 @@ $('installBtn').onclick = promptInstall;
 $('installMenuBtn').onclick = promptInstall;
 // iPhone and iPad have no install prompt: explain the Share menu instead
 if (/iphone|ipad|ipod/i.test(navigator.userAgent) && !standalone()) $('iosHint').hidden = false;
+
+/* Test hook: the automated tests (tests/run.mjs) reach a few pure helpers when the page is opened with #selftest */
+if (location.hash === '#selftest') window.__mypdf = { bidiRuns, isHebrew, paperName, pageNumberText, pagesText, looksLikePdf, escapeHtml, fieldSize };
 })();
