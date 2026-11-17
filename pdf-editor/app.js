@@ -482,15 +482,17 @@ async function addFiles(fileList) {
       if (f.size > MAX_FILE_BYTES) { toast(`"${f.name}" גדול מדי (מעל ${MAX_FILE_BYTES / 1024 / 1024} MB).`, 5000); continue; }
       const bytes = new Uint8Array(await f.arrayBuffer());
       if (!looksLikePdf(bytes)) { toast(`"${f.name}" אינו קובץ PDF תקין.`, 5000); continue; }
-      await addBytes(bytes, f.name);
+      const open = await unlockIfNeeded(bytes, f.name);
+      if (!open) continue;
+      await addBytes(open, f.name);
       added++;
     } catch (e) {
       console.error(e);
-      const msg = e && e.name === 'PasswordException' ? `הקובץ "${f.name}" מוגן בסיסמה. הסירו את הסיסמה ונסו שוב.` : `לא הצלחתי לפתוח את "${f.name}". ייתכן שהקובץ פגום.`;
+      const msg = e && e.name === 'PasswordException' ? `לא הצלחתי לפתוח את "${f.name}" עם הסיסמה הזו.` : `לא הצלחתי לפתוח את "${f.name}". ייתכן שהקובץ פגום.`;
       toast(msg, 5000);
     }
   }
-  if (added) { history.push(before); $('undoBtn').disabled = false; }
+  if (added) { history.push(before); $('undoBtn').disabled = false; maybeTour(); }
   busy(false);
   renderGrid();
 }
@@ -564,6 +566,7 @@ async function makeSample() {
   busy(false);
   renderGrid();
   toast('נטען קובץ לדוגמה עם 4 עמודים');
+  maybeTour();
 }
 
 /* ---------- Views and bottom sheets ---------- */
@@ -1180,20 +1183,25 @@ async function pagesAsPictures(bytes, opt) {
 async function makeFile(pages) {
   let bytes = await buildPdf(pages);
   const level = $('dlSize').value;
-  if (level === 'none') return { bytes, before: 0 };
-  const before = bytes.length;
-  busy(true, 'מקטין את הקובץ…');
-  try {
-    const small = level === 'max' ? await pagesAsPictures(bytes, COMPRESS.max) : await shrinkImages(bytes, COMPRESS[level]);
-    if (small.length < bytes.length) bytes = small;
-  } catch (e) { console.warn('compress', e); }
-  return { bytes, before };
+  let before = 0;
+  if (level !== 'none') {
+    before = bytes.length;
+    busy(true, 'מקטין את הקובץ…');
+    try {
+      const small = level === 'max' ? await pagesAsPictures(bytes, COMPRESS.max) : await shrinkImages(bytes, COMPRESS[level]);
+      if (small.length < bytes.length) bytes = small;
+    } catch (e) { console.warn('compress', e); }
+  }
+  const pw = $('dlLock').checked ? $('dlPw').value : '';
+  if (pw) { busy(true, 'נועל את הקובץ בסיסמה…'); bytes = await lockPdf(bytes, pw); }
+  return { bytes, before, locked: !!pw };
 }
 async function exportPages(pages, name) {
   busy(true, `מכין קובץ עם ${pages.length} עמודים…`);
   try {
-    const { bytes, before } = await makeFile(pages);
+    const { bytes, before, locked } = await makeFile(pages);
     saveBytes(bytes, name);
+    if (locked) setTimeout(() => toast('הקובץ נעול בסיסמה. בלי הסיסמה אי אפשר לפתוח אותו, אז כדאי לשמור אותה.', 5500), 5200);
     toast(before && before > bytes.length
       ? `הקובץ ירד והוקטן: ${mb(before)} ← ${mb(bytes.length)} (חיסכון של ${Math.round((1 - bytes.length / before) * 100)}%)`
       : `הקובץ "${name}" ירד (${mb(bytes.length)})`, 5000);
@@ -1221,8 +1229,9 @@ $('downloadBtn').onclick = () => {
   $('dlSelLabel').textContent = k === 1 ? 'הורדת העמוד שנבחר בלבד' : `הורדת ${k} העמודים שנבחרו`;
   openSheet('dlSheet');
 };
-$('dlAllBtn').onclick = () => { closeSheets(); exportPages(state.pages, outName()); };
+$('dlAllBtn').onclick = () => { if (!lockReady()) return; closeSheets(); exportPages(state.pages, outName()); };
 const exportSelected = () => {
+  if (!lockReady()) return;
   const pages = state.pages.filter(p => state.selected.has(p.id));
   if (pages.length) { closeSheets(); exportPages(pages, outName('-עמודים-נבחרים')); }
 };
@@ -2695,6 +2704,7 @@ async function placeSignature(url) {
 const canShareFiles = (() => { try { return !!(navigator.canShare && navigator.canShare({ files: [new File([new Uint8Array(1)], 'a.pdf', { type: 'application/pdf' })] })); } catch (_) { return false; } })();
 $('shareBtn').hidden = !canShareFiles;
 $('shareBtn').onclick = async () => {
+  if (!lockReady()) return;
   closeSheets();
   busy(true, 'מכין את הקובץ לשיתוף…');
   let bytes;
@@ -2705,6 +2715,107 @@ $('shareBtn').onclick = async () => {
   try { await navigator.share({ files: [file], title: name }); }
   catch (e) { if (e && e.name !== 'AbortError') { saveBytes(bytes, name); toast('השיתוף לא זמין כאן, אז הקובץ ירד למכשיר.', 4500); } }
 };
+
+/* ---------- Passwords ----------
+   Locked files are opened with the password once, and a plain copy is kept (only on this device);
+   a downloaded file can be locked with a password (AES-256). Both use a second build of the PDF
+   library that knows encryption, loaded only when needed. */
+let cryptLib = null;
+function loadCrypt() {
+  return cryptLib || (cryptLib = new Promise((res) => {
+    const orig = window.PDFLib, sc = document.createElement('script');
+    sc.src = 'vendor/pdf-lib-crypt.min.js';
+    sc.onload = () => { const lib = window.PDFLib; window.PDFLib = orig; res(lib); };
+    sc.onerror = () => { window.PDFLib = orig; cryptLib = null; res(null); };
+    document.head.appendChild(sc);
+  }));
+}
+async function decryptPdf(bytes, password) {
+  const L = await loadCrypt(); if (!L) throw new Error('crypt unavailable');
+  const src = await L.PDFDocument.load(bytes, { password });
+  const out = await L.PDFDocument.create();
+  (await out.copyPages(src, src.getPageIndices())).forEach(pg => out.addPage(pg));
+  return out.save();
+}
+async function lockPdf(bytes, password) {
+  const L = await loadCrypt(); if (!L) throw new Error('crypt unavailable');
+  const d = await L.PDFDocument.load(bytes);
+  const owner = Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, '0')).join('');
+  d.encrypt({ userPassword: password, ownerPassword: owner,
+    permissions: { printing: 'highResolution', modifying: true, copying: true, annotating: true, fillingForms: true, contentAccessibility: true, documentAssembly: true } });
+  return d.save();
+}
+async function unlockIfNeeded(bytes, name) {
+  let encrypted = false;
+  try { encrypted = (await PDFDocument.load(bytes, { ignoreEncryption: true, updateMetadata: false })).isEncrypted; } catch (_) {}
+  if (!encrypted) return bytes;
+  try { return await decryptPdf(bytes, ''); } catch (_) {}      // only restricted (printing, copying), no password to open
+  let wrong = false;
+  for (;;) {
+    busy(false);
+    const pw = await askPassword(name, wrong);
+    if (pw == null) return null;
+    busy(true, 'פותח את הקובץ…');
+    try { return await decryptPdf(bytes, pw); } catch (_) { wrong = true; }
+  }
+}
+function askPassword(name, wrong) {
+  return new Promise((resolve) => {
+    $('pwName').textContent = name;
+    $('pwError').hidden = !wrong;
+    $('pwInput').value = ''; $('pwInput').type = 'password'; $('pwShow').setAttribute('aria-pressed', 'false');
+    const done = (v) => { $('pwSheet').removeEventListener('close', onClose); $('pwSheet').close(); resolve(v); };
+    // the close event of a previous round can arrive late: only a real close (sheet not open) cancels
+    const onClose = () => { if (!$('pwSheet').open) { $('pwSheet').removeEventListener('close', onClose); resolve(null); } };
+    $('pwOpen').onclick = () => { const v = $('pwInput').value; if (v) done(v); else $('pwInput').focus(); };
+    $('pwInput').onkeydown = (e) => { if (e.key === 'Enter') $('pwOpen').click(); };
+    $('pwSheet').addEventListener('close', onClose);
+    openSheet('pwSheet');
+    setTimeout(() => $('pwInput').focus(), 60);
+  });
+}
+$('pwShow').onclick = () => { const show = $('pwInput').type === 'password'; $('pwInput').type = show ? 'text' : 'password'; $('pwShow').setAttribute('aria-pressed', String(show)); };
+$('dlPwShow').onclick = () => { const show = $('dlPw').type === 'password'; $('dlPw').type = show ? 'text' : 'password'; $('dlPwShow').setAttribute('aria-pressed', String(show)); };
+$('dlPw').addEventListener('input', () => { if ($('dlPw').value.length >= 4) $('dlPwError').hidden = true; });
+$('dlLock').addEventListener('change', () => { $('dlPwRow').hidden = !$('dlLock').checked; if ($('dlLock').checked) $('dlPw').focus(); });
+function lockReady() {
+  if (!$('dlLock').checked) return true;
+  if ($('dlPw').value.length < 4) { $('dlPwError').hidden = false; $('dlPw').focus(); return false; }
+  $('dlPwError').hidden = true;
+  return true;
+}
+
+/* ---------- Intro tour ----------
+   Shown once after the first document is opened, and again from the ⋯ menu. */
+const TOUR = [
+  { el: () => document.querySelector('.card:not(.add) .thumb'), title: 'העמודים שלך', text: 'הקשה על עמוד פותחת את כל הפעולות שלו: עריכה, סיבוב, חיתוך, עמוד ריק ועוד. לחיצה ארוכה בוחרת כמה עמודים יחד.' },
+  { el: () => document.querySelector('.tab[data-tab="edit"]'), title: 'עריכה', text: 'כותבים ישר על הדף, משנים מילים שכבר קיימות במסמך, ומוחקים אזורים, כולל השחרה מאובטחת.' },
+  { el: () => document.querySelector('.tab[data-tab="insert"]'), title: 'הוספה', text: 'חתימה, תמונה או לוגו, מרקר, צורות, תאריך ועמוד ריק.' },
+  { el: () => document.querySelector('.tab[data-tab="tools"]'), title: 'כלים', text: 'סימן מים, מספרי עמודים, הקטנת קובץ, הוספת קבצים והפיכת תמונות לעמודים.' },
+  { el: () => $('undoBtn'), title: 'ביטול ושמירה', text: 'טעית? ביטול פעולה. העבודה נשמרת במכשיר אוטומטית, גם אם סוגרים את האפליקציה.' },
+  { el: () => $('downloadBtn'), title: 'סיימת?', text: 'הורדה או שיתוף לוואטסאפ ולמייל, עם אפשרות להקטין את הקובץ ולנעול אותו בסיסמה.' },
+];
+let tourStep = -1;
+function startTour() { closeSheets(); if (edActive()) leaveEditor(); tourStep = 0; $('tour').hidden = false; showTourStep(); }
+function endTour() { tourStep = -1; $('tour').hidden = true; prefs.tourDone = true; savePrefs(); }
+function showTourStep() {
+  const st = TOUR[tourStep], el = st && st.el();
+  if (!st) { endTour(); return; }
+  if (!el || !el.getBoundingClientRect().width) { tourStep++; showTourStep(); return; }
+  el.scrollIntoView({ block: 'nearest' });
+  const r = el.getBoundingClientRect(), pad = 6;
+  Object.assign($('tourHole').style, { left: r.left - pad + 'px', top: r.top - pad + 'px', width: r.width + pad * 2 + 'px', height: r.height + pad * 2 + 'px' });
+  $('tourTitle').textContent = st.title; $('tourText').textContent = st.text;
+  $('tourCount').textContent = `${tourStep + 1} מתוך ${TOUR.length}`;
+  $('tourNext').textContent = tourStep === TOUR.length - 1 ? 'סיום' : 'הבא';
+  const card = $('tourCard'), ch = card.offsetHeight, below = r.bottom + 14 + ch < innerHeight - 8;
+  card.style.top = (below ? r.bottom + 14 : Math.max(8, r.top - 14 - ch)) + 'px';
+}
+$('tourNext').onclick = () => { tourStep++; showTourStep(); };
+$('tourSkip').onclick = endTour;
+$('tourBtn').onclick = startTour;
+window.addEventListener('resize', () => { if (tourStep >= 0) showTourStep(); });
+function maybeTour() { if (!prefs.tourDone && state.pages.length && !edActive()) setTimeout(() => { if (tourStep < 0 && !document.querySelector('dialog[open]')) startTour(); }, 900); }
 
 /* ---------- Saving work on the device ----------
    The original files, the pages with every change, pictures and settings are kept in the browser's
