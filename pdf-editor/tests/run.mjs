@@ -164,7 +164,9 @@ test('change: one word in a line, even when stored letter by letter', async () =
   const words = await page.$$eval('.ti', e => e.map(x => x.title));
   assert(words.includes('שלום') && words.includes('48213') && words.includes('ישראלי'), 'words found: ' + words.join(','));
   await page.click('.ti[title="ישראלי"]'); await page.keyboard.type('כהן');
-  await page.touchscreen.tap(20, 600);
+  // tap an empty spot on the page (relative to the page: phone screens differ in height)
+  const st = await page.locator('#stage').boundingBox();
+  await page.touchscreen.tap(st.x + 20, st.y + 230);
   const out = await readPdf(page, await download(page, { secure: true }));
   assert(!out.text.includes('ישראלי'), 'old word removed with secure delete');
   await ctx.close();
