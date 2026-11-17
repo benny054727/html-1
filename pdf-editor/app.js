@@ -503,14 +503,32 @@ function openPdf(bytes) {
     standardFontDataUrl: 'vendor/standard_fonts/',
   }).promise;
 }
-async function addBytes(bytes, name) {
-  const s0 = state.pages.length > 0;
-  if (!s0 && pendingSession) await forgetSession();   // a new document replaces the saved one
+async function addSource(bytes, name) {
   const pdf = await openPdf(bytes);
   const src = state.sources.length;
   const key = 'f' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
   state.sources.push({ name, bytes, pdf, cache: new Map(), key });
   persisted.add(key); store.put('files', key, bytes);
+  return src;
+}
+/* A blank page the same size and direction as the page it follows */
+async function insertBlank(afterId) {
+  const ref = state.pages.find(p => p.id === afterId);
+  let w = 595.28, h = 841.89;
+  if (ref) { const pg = await getPage(ref.src, ref.idx); const v = pg.getViewport({ scale: 1, rotation: totalRot(pg, ref) }); w = v.width; h = v.height; }
+  const doc = await PDFDocument.create(); doc.addPage([w, h]);
+  const src = await addSource(await doc.save(), 'עמוד ריק');
+  snapshot();
+  const page = { id: uid++, src, idx: 0, rot: 0, overlays: [], rects: [], objs: [] };
+  state.pages.splice(ref ? idxOf(afterId) + 1 : state.pages.length, 0, page);
+  renderGrid();
+  toast('נוסף עמוד ריק');
+  return page;
+}
+async function addBytes(bytes, name) {
+  const s0 = state.pages.length > 0;
+  if (!s0 && pendingSession) await forgetSession();   // a new document replaces the saved one
+  const src = await addSource(bytes, name), pdf = state.sources[src].pdf;
   for (let i = 0; i < pdf.numPages; i++) state.pages.push({ id: uid++, src, idx: i, rot: 0, overlays: [], rects: [], objs: [] });
   const nFields = await loadFormFields(src);
   if (nFields) setTimeout(() => toast(`נמצא טופס עם ${nFields} שדות. אפשר למלא אותם במסך העריכה.`, 4500), 400);
@@ -626,7 +644,7 @@ async function fillThumb(card, p, n, total, set, seq) {
   const pg = await getPage(p.src, p.idx);
   const R = totalRot(pg, p);
   const base = pg.getViewport({ scale: 1, rotation: R });
-  const key = JSON.stringify([R, fieldKey(p), p.overlays, p.rects || [], (p.objs || []).map(o => [o.asset, o.cx, o.cy, o.w, o.h, o.rot, o.op]), set.wm, set.pn.on ? [set.pn, n, total] : 0]);
+  const key = JSON.stringify([R, p.crop || 0, fieldKey(p), p.overlays, p.rects || [], (p.objs || []).map(o => [o.asset, o.cx, o.cy, o.w, o.h, o.rot, o.op]), set.wm, set.pn.on ? [set.pn, n, total] : 0]);
   await ensureAssets([p]);
   const cached = thumbCache.get(p.id);
   let canvas;
@@ -642,6 +660,7 @@ async function fillThumb(card, p, n, total, set, seq) {
     try { await pg.render({ canvasContext: ctx, viewport: vp, annotationMode: FORMS_OFF }).promise; } catch (e) { console.warn(e); }
     drawRects(ctx, p, vp);
     drawStamps(ctx, stampList(p, pg, vp, n, total, set), scale);
+    if (p.crop) canvas = cropCanvas(canvas, vp, p.crop);
     thumbCache.set(p.id, { key, canvas });
   }
   updateStripItem(p.id);
@@ -705,6 +724,8 @@ $('pageSheet').addEventListener('click', (e) => {
     case 'right': move(id, idxOf(id) + 1); break;
     case 'select': startSelecting(id); break;
     case 'del': removePages(one); break;
+    case 'blank': insertBlank(id); break;
+    case 'crop': openCrop(id); break;
   }
 });
 function startSelecting(id) {
@@ -1053,6 +1074,7 @@ async function buildPdf(pages) {
     }
     const R = totalRot(pg, p);
     page.setRotation(degrees(R));
+    if (p.crop) { const c = p.crop; page.setCropBox(c.x1, c.y1, c.x2 - c.x1, c.y2 - c.y1); }
     const vp = pg.getViewport({ scale: 1, rotation: R });
     if (!flatten) for (const r of rects) {
       page.drawRectangle({ x: r.x1, y: r.y1, width: r.x2 - r.x1, height: r.y2 - r.y1, color: hexRgb(r.color), borderWidth: 0 });
@@ -1224,6 +1246,7 @@ async function openEditor(id) {
   ed.pid = id; ed.selId = null; ed.selRect = null; cancelGestures(); ed.pinch = null; pointers.clear();
   showView('edit');
   renderGrid();
+  syncPaste();
   await drawEditor();
 }
 const DRAW_INFO = {
@@ -1233,6 +1256,7 @@ const DRAW_INFO = {
 };
 function setMode(m) {
   finishInline();
+  setTimeout(syncPaste);
   ed.mode = m; ed.selId = null; ed.selRect = null; ed.selObj = null;
   document.querySelectorAll('#edModes .mode').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.mode === m)));
   $('stage').dataset.mode = m;
@@ -1397,7 +1421,7 @@ function positionOv(el, o) {
 }
 function drawOverlays() {
   const stage = $('stage'), p = edPage(); if (!p || !ed.vp) return;
-  stage.querySelectorAll('.ov:not(.inline), .er, .ti, .obj, .ff').forEach(el => el.remove());
+  stage.querySelectorAll('.ov:not(.inline), .er, .ti, .obj, .ff, .crop-mask').forEach(el => el.remove());
   if (!ed.inline) stage.querySelector('.ov.inline')?.remove();
   const rects = p.rects || [];
   for (const r of rects) {
@@ -1411,6 +1435,7 @@ function drawOverlays() {
   }
   drawObjects(p);
   drawFields(p);
+  drawCropMask(p);
   if (ed.mode === 'edit' || ed.mode === 'mark') {
     const covers = (p.rects || []).filter(r => r.link);
     for (const u of getUnits()) {
@@ -2114,7 +2139,7 @@ document.addEventListener('keydown', (e) => {
     ed.selId = null; ed.selRect = null; drawOverlays();
   }
 });
-function leaveEditor() { finishInline(); cancelGestures(); hideGuide(); showView('pages'); renderGrid(); }
+function leaveEditor() { finishInline(); $('pasteBtn').hidden = true; cancelGestures(); hideGuide(); showView('pages'); renderGrid(); }
 $('edPrev').onclick = () => { const n = idxOf(ed.pid); if (n > 0) openEditor(state.pages[n - 1].id); };
 $('edNext').onclick = () => { const n = idxOf(ed.pid); if (n < state.pages.length - 1) openEditor(state.pages[n + 1].id); };
 window.addEventListener('resize', () => { if (edActive() && ed.pg) { clearTimeout(ed.rt); ed.rt = setTimeout(() => { computeFit(); layoutEditor(); scheduleRender(); }, 200); } });
@@ -2158,7 +2183,8 @@ function moveObj(e) {
     if (o.keep) { const f = Math.max(0.05, Math.max(fx, fy)); o.w = Math.max(8, g.w0 * f); o.h = Math.max(8, g.h0 * f); }
     else { o.w = Math.max(6, g.w0 * fx); o.h = Math.max(6, g.h0 * fy); }
   } else {
-    [o.cx, o.cy] = ed.vp.convertToPdfPoint(mx - g.dx, my - g.dy);
+    const [sx, sy] = snapObject(o, mx - g.dx, my - g.dy);
+    [o.cx, o.cy] = ed.vp.convertToPdfPoint(sx, sy);
   }
   const el = $('stage').querySelector(`.obj[data-id="${o.id}"]`);
   if (el) placeObjEl(el, o);
@@ -2166,6 +2192,7 @@ function moveObj(e) {
 }
 function endObjDrag() {
   const g = ed.odrag; ed.odrag = null;
+  clearSnapLines();
   if (g.resize && g.moved && g.o.kind === 'shape') { renderShape(g.o); }   // keep line widths crisp after resizing
   drawOverlays();
   if (g.moved) renderGrid();
@@ -2310,6 +2337,174 @@ $('obDup').onclick = () => {
   p.objs.push(c); selectObj(c.id); renderGrid();
 };
 
+/* ---------- Alignment guides ----------
+   While a picture or shape is moved, its centre and edges snap to the page centre and to the
+   centres and edges of the other items; a pink line shows what it lines up with. */
+function clearSnapLines() { $('stage').querySelectorAll('.snapline').forEach(el => el.remove()); }
+function snapObject(o, x, y) {
+  clearSnapLines();
+  const p = edPage(), s = ed.scale, T = 6;
+  const hw = o.w * s / 2, hh = o.h * s / 2;
+  const xs = [ed.vp.width / 2], ys = [ed.vp.height / 2];
+  for (const q of p.objs || []) {
+    if (q.id === o.id) continue;
+    const [qx, qy] = ed.vp.convertToViewportPoint(q.cx, q.cy), qw = q.w * s / 2, qh = q.h * s / 2;
+    xs.push(qx, qx - qw, qx + qw); ys.push(qy, qy - qh, qy + qh);
+  }
+  const best = (vals, mine) => {
+    let r = null;
+    for (const v of vals) for (const [k, m] of mine.entries()) { const d = v - m; if (Math.abs(d) <= T && (!r || Math.abs(d) < Math.abs(r.d))) r = { d, at: v, k }; }
+    return r;
+  };
+  const bx = best(xs, [x, x - hw, x + hw]), by = best(ys, [y, y - hh, y + hh]);
+  if (bx) { x += bx.d; line('v', bx.at); }
+  if (by) { y += by.d; line('h', by.at); }
+  function line(dir, at) {
+    const l = document.createElement('div');
+    l.className = 'snapline ' + dir;
+    if (dir === 'v') l.style.left = at + 'px'; else l.style.top = at + 'px';
+    $('stage').appendChild(l);
+  }
+  return [x, y];
+}
+
+/* ---------- Copy and paste ---------- */
+let clip = null;
+function copySelection() {
+  const p = edPage(); if (!p) return false;
+  const o = edSel(), ob = edObj();
+  if (o) clip = { kind: 'ov', data: JSON.parse(JSON.stringify(o)) };
+  else if (ob) clip = { kind: 'obj', data: JSON.parse(JSON.stringify(ob)) };
+  else return false;
+  syncPaste();
+  toast('הועתק. אפשר להדביק בכל עמוד.', 2200);
+  return true;
+}
+function pasteClip() {
+  const p = edPage(); if (!p || !clip) return;
+  finishInline();
+  snapshot();
+  const [cx, cy] = visibleCenter();
+  if (clip.kind === 'ov') {
+    const o = { ...clip.data, id: uid++, px: cx, py: cy, ang: ed.R };
+    delete o.srcItem; delete o.srcItems; delete o.rectId; delete o.srcY; delete o.anchor; delete o.vb; delete o.fresh;
+    p.overlays.push(o); ed.selId = o.id; ed.selObj = null; loadFields(o);
+  } else {
+    const o = { ...clip.data, id: uid++, cx, cy, ang: ed.R };
+    p.objs = p.objs || []; p.objs.push(o); ed.selObj = o.id; ed.selId = null;
+  }
+  drawOverlays(); renderGrid();
+}
+function syncPaste() { $('pasteBtn').hidden = !(clip && edActive() && !['shape', 'mark', 'erase'].includes(ed.mode)); }
+$('fbCopy').onclick = copySelection;
+$('obCopy').onclick = copySelection;
+$('pasteBtn').onclick = pasteClip;
+document.addEventListener('keydown', (e) => {
+  if (!edActive() || !(e.ctrlKey || e.metaKey)) return;
+  if (/^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement?.tagName)) return;
+  const k = e.key.toLowerCase();
+  if (k === 'c' && copySelection()) e.preventDefault();
+  else if (k === 'v' && clip) { e.preventDefault(); pasteClip(); }
+});
+
+/* ---------- Crop margins ---------- */
+let cropState = null;
+const MM = 72 / 25.4;
+async function openCrop(id) {
+  const p = state.pages.find(x => x.id === id); if (!p) return;
+  const pg = await getPage(p.src, p.idx), R = totalRot(pg, p);
+  const vp1 = pg.getViewport({ scale: 1, rotation: R });
+  const scale = Math.min(300 / vp1.width, 300 / vp1.height);
+  const vp = pg.getViewport({ scale, rotation: R });
+  const c = $('cropCanvas');
+  c.width = Math.ceil(vp.width); c.height = Math.ceil(vp.height);
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height);
+  await pg.render({ canvasContext: ctx, viewport: vp, annotationMode: FORMS_OFF }).promise;
+  const page = ctx.getImageData(0, 0, c.width, c.height);
+  // current margins in millimetres, as the page is shown
+  let m = { t: 0, r: 0, b: 0, l: 0 };
+  if (p.crop) {
+    const [a, b2, cc, d] = vp1.convertToViewportRectangle([p.crop.x1, p.crop.y1, p.crop.x2, p.crop.y2]);
+    const L = Math.min(a, cc), T = Math.min(b2, d), Rr = Math.max(a, cc), B = Math.max(b2, d);
+    m = { t: T / MM, l: L / MM, r: (vp1.width - Rr) / MM, b: (vp1.height - B) / MM };
+  }
+  cropState = { p, pg, R, vp1, vp, page, m };
+  const maxV = Math.floor(vp1.height / MM * 0.45), maxH = Math.floor(vp1.width / MM * 0.45);
+  for (const [k, max] of [['t', maxV], ['b', maxV], ['r', maxH], ['l', maxH]]) { const el = $('crop_' + k); el.max = max; el.value = Math.round(m[k]); }
+  $('cropAll').checked = false;
+  drawCropPreview();
+  openSheet('cropSheet');
+}
+function drawCropPreview() {
+  const st = cropState; if (!st) return;
+  const c = $('cropCanvas'), ctx = c.getContext('2d'), k = st.vp.scale * MM;
+  ctx.putImageData(st.page, 0, 0);
+  const m = st.m, x = m.l * k, y = m.t * k, w = c.width - (m.l + m.r) * k, h = c.height - (m.t + m.b) * k;
+  ctx.fillStyle = 'rgba(15, 23, 32, .55)';
+  ctx.fillRect(0, 0, c.width, y); ctx.fillRect(0, y + h, c.width, c.height - y - h);
+  ctx.fillRect(0, y, x, h); ctx.fillRect(x + w, y, c.width - x - w, h);
+  ctx.strokeStyle = '#14b8a6'; ctx.lineWidth = 2; ctx.setLineDash([5, 4]); ctx.strokeRect(x, y, w, h); ctx.setLineDash([]);
+  for (const kk of ['t', 'b', 'r', 'l']) $('crop_' + kk + '_v').textContent = Math.round(m[kk]) + ' מ״מ';
+}
+['t', 'b', 'r', 'l'].forEach(k => $('crop_' + k).addEventListener('input', () => { cropState.m[k] = +$('crop_' + k).value; drawCropPreview(); }));
+/* Trim white margins: find where the content starts on each side */
+$('cropAuto').onclick = () => {
+  const st = cropState; if (!st) return;
+  const { data, width, height } = st.page;
+  let x0 = width, y0 = height, x1 = -1, y1 = -1;
+  for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+    const i = (y * width + x) * 4;
+    if (data[i] < 238 || data[i + 1] < 238 || data[i + 2] < 238) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+  }
+  if (x1 < 0) { toast('העמוד ריק, אין מה לחתוך'); return; }
+  const k = st.vp.scale * MM, pad = 5;    // keep 5 mm around the content
+  st.m = { l: Math.max(0, x0 / k - pad), t: Math.max(0, y0 / k - pad), r: Math.max(0, (width - x1) / k - pad), b: Math.max(0, (height - y1) / k - pad) };
+  for (const kk of ['t', 'b', 'r', 'l']) $('crop_' + kk).value = Math.round(st.m[kk]);
+  drawCropPreview();
+};
+$('cropReset').onclick = () => { cropState.m = { t: 0, r: 0, b: 0, l: 0 }; ['t', 'b', 'r', 'l'].forEach(k => { $('crop_' + k).value = 0; }); drawCropPreview(); };
+async function cropFor(p, m) {
+  const pg = await getPage(p.src, p.idx), vp1 = pg.getViewport({ scale: 1, rotation: totalRot(pg, p) });
+  if (!m.t && !m.r && !m.b && !m.l) return null;
+  const L = m.l * MM, T = m.t * MM, Rr = vp1.width - m.r * MM, B = vp1.height - m.b * MM;
+  if (Rr - L < 36 || B - T < 36) return undefined;           // too small to keep
+  const [ax, ay] = vp1.convertToPdfPoint(L, T), [bx, by] = vp1.convertToPdfPoint(Rr, B);
+  return { x1: Math.min(ax, bx), y1: Math.min(ay, by), x2: Math.max(ax, bx), y2: Math.max(ay, by) };
+}
+$('cropApply').onclick = async () => {
+  const st = cropState; if (!st) return;
+  const targets = $('cropAll').checked ? state.pages : [st.p];
+  const crops = [];
+  for (const p of targets) crops.push([p, await cropFor(p, st.m)]);
+  if (crops.some(([, c]) => c === undefined)) { toast('החיתוך גדול מדי: לא נשאר מספיק מהעמוד.', 4000); return; }
+  snapshot();
+  for (const [p, c] of crops) { if (c) p.crop = c; else delete p.crop; }
+  closeSheets(); renderGrid(); if (edActive()) drawOverlays();
+  toast(targets.length > 1 ? 'החיתוך הוחל על כל העמודים' : 'העמוד נחתך');
+};
+/* A cropped thumbnail shows only what stays */
+function cropCanvas(canvas, vp, crop) {
+  const [a, b, c, d] = vp.convertToViewportRectangle([crop.x1, crop.y1, crop.x2, crop.y2]);
+  const x = Math.max(0, Math.round(Math.min(a, c))), y = Math.max(0, Math.round(Math.min(b, d)));
+  const w = Math.max(1, Math.round(Math.abs(c - a))), h = Math.max(1, Math.round(Math.abs(d - b)));
+  const out = document.createElement('canvas'); out.width = w; out.height = h;
+  out.getContext('2d').drawImage(canvas, x, y, w, h, 0, 0, w, h);
+  return out;
+}
+/* In the editor the part that is cut away is dimmed */
+function drawCropMask(p) {
+  if (!p.crop) return;
+  const v = toView(p.crop), W = ed.vp.width, H = ed.vp.height;
+  const parts = [[0, 0, W, v.top], [0, v.top + v.height, W, H - v.top - v.height], [0, v.top, v.left, v.height], [v.left + v.width, v.top, W - v.left - v.width, v.height]];
+  for (const [x, y, w, h] of parts) {
+    if (w <= 0 || h <= 0) continue;
+    const el = document.createElement('div'); el.className = 'crop-mask';
+    Object.assign(el.style, { left: x + 'px', top: y + 'px', width: w + 'px', height: h + 'px' });
+    $('stage').appendChild(el);
+  }
+}
+
 /* ---------- Insert sheet ---------- */
 async function ensureEditor() {
   if (!edActive()) await openEditor(idxOf(ed.pid) >= 0 ? ed.pid : state.pages[0].id);
@@ -2319,6 +2514,7 @@ $('insertSheet').addEventListener('click', async (e) => {
   const k = b.dataset.ins;
   closeSheets();
   if (k === 'sign') { openSignature(); return; }
+  if (k === 'blank') { const pg = await insertBlank(edActive() ? ed.pid : (state.pages[state.pages.length - 1] || {}).id); if (edActive() && pg) openEditor(pg.id); return; }
   if (k === 'image') { $('imgInput').click(); return; }
   await ensureEditor();
   if (k === 'mark') { setMode('mark'); return; }
