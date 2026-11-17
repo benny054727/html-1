@@ -1089,17 +1089,104 @@ function outName(suffix = '') {
   n = n.replace(/\.pdf$/i, '');
   return n + suffix + '.pdf';
 }
+/* ---------- Making files smaller ----------
+   light / strong: photos inside the file are re-saved as smaller JPEGs (text stays text);
+   max: every page becomes one picture (smallest, but the original text can no longer be selected). */
+const COMPRESS = {
+  light: { side: 2000, q: 0.78 },
+  strong: { side: 1300, q: 0.6 },
+  max: { dpi: 110, q: 0.6 },
+};
+const mb = (n) => n < 1024 * 1024 ? `${Math.max(1, Math.round(n / 1024))}KB` : `${(n / 1024 / 1024).toFixed(1)}MB`;
+async function shrinkImages(bytes, opt) {
+  const { PDFName, PDFNumber, PDFRawStream } = PDFLib;
+  const doc = await PDFDocument.load(bytes, { ignoreEncryption: true });
+  const ctx = doc.context;
+  for (const [ref, obj] of ctx.enumerateIndirectObjects()) {
+    if (!(obj instanceof PDFRawStream)) continue;
+    const d = obj.dict;
+    if (String(d.get(PDFName.of('Subtype'))) !== '/Image' || d.get(PDFName.of('ImageMask')) || d.get(PDFName.of('SMask')) || d.get(PDFName.of('Mask'))) continue;
+    const filter = String(d.get(PDFName.of('Filter')) || '').replace(/[\s\[\]]/g, '');
+    const cs = String(d.get(PDFName.of('ColorSpace')) || '');
+    if (filter !== '/DCTDecode') continue;                                    // only JPEG photos
+    if (cs && cs !== '/DeviceRGB' && cs !== '/DeviceGray') continue;          // leave CMYK and special colours alone
+    try {
+      const bmp = await createImageBitmap(new Blob([obj.contents], { type: 'image/jpeg' }));
+      const k = Math.min(1, opt.side / Math.max(bmp.width, bmp.height));
+      const W = Math.max(1, Math.round(bmp.width * k)), H = Math.max(1, Math.round(bmp.height * k));
+      const c = document.createElement('canvas');
+      c.width = W; c.height = H;
+      c.getContext('2d').drawImage(bmp, 0, 0, W, H);
+      if (bmp.close) bmp.close();
+      const blob = await new Promise(r => c.toBlob(r, 'image/jpeg', opt.q));
+      const nb = new Uint8Array(await blob.arrayBuffer());
+      c.width = c.height = 0;
+      if (nb.length >= obj.contents.length) continue;                         // only keep it if it really got smaller
+      const nd = d.clone(ctx);
+      nd.set(PDFName.of('Width'), PDFNumber.of(W));
+      nd.set(PDFName.of('Height'), PDFNumber.of(H));
+      nd.set(PDFName.of('ColorSpace'), PDFName.of('DeviceRGB'));
+      nd.set(PDFName.of('BitsPerComponent'), PDFNumber.of(8));
+      nd.set(PDFName.of('Filter'), PDFName.of('DCTDecode'));
+      nd.delete(PDFName.of('DecodeParms')); nd.delete(PDFName.of('Decode'));
+      nd.set(PDFName.of('Length'), PDFNumber.of(nb.length));
+      ctx.assign(ref, PDFRawStream.of(nd, nb));
+    } catch (_) { /* an image the browser cannot read stays as it is */ }
+  }
+  return doc.save({ useObjectStreams: true });
+}
+async function pagesAsPictures(bytes, opt) {
+  const src = await openPdf(bytes);
+  const out = await PDFDocument.create();
+  for (let i = 1; i <= src.numPages; i++) {
+    busy(true, `מקטין עמוד ${i} מתוך ${src.numPages}…`);
+    const pg = await src.getPage(i);
+    const vp1 = pg.getViewport({ scale: 1 });
+    const vp = pg.getViewport({ scale: opt.dpi / 72 });
+    const c = document.createElement('canvas');
+    c.width = Math.ceil(vp.width); c.height = Math.ceil(vp.height);
+    const x = c.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, c.width, c.height);
+    await pg.render({ canvasContext: x, viewport: vp }).promise;
+    const img = await out.embedJpg(c.toDataURL('image/jpeg', opt.q));
+    c.width = c.height = 0;
+    const page = out.addPage([vp1.width, vp1.height]);
+    page.drawImage(img, { x: 0, y: 0, width: vp1.width, height: vp1.height });
+  }
+  return out.save({ useObjectStreams: true });
+}
+async function makeFile(pages) {
+  let bytes = await buildPdf(pages);
+  const level = $('dlSize').value;
+  if (level === 'none') return { bytes, before: 0 };
+  const before = bytes.length;
+  busy(true, 'מקטין את הקובץ…');
+  try {
+    const small = level === 'max' ? await pagesAsPictures(bytes, COMPRESS.max) : await shrinkImages(bytes, COMPRESS[level]);
+    if (small.length < bytes.length) bytes = small;
+  } catch (e) { console.warn('compress', e); }
+  return { bytes, before };
+}
 async function exportPages(pages, name) {
   busy(true, `מכין קובץ עם ${pages.length} עמודים…`);
   try {
-    const bytes = await buildPdf(pages);
+    const { bytes, before } = await makeFile(pages);
     saveBytes(bytes, name);
-    toast(`הקובץ "${name}" ירד (${(bytes.length / 1024 / 1024).toFixed(2)} MB)`, 4000);
+    toast(before && before > bytes.length
+      ? `הקובץ ירד והוקטן: ${mb(before)} ← ${mb(bytes.length)} (חיסכון של ${Math.round((1 - bytes.length / before) * 100)}%)`
+      : `הקובץ "${name}" ירד (${mb(bytes.length)})`, 5000);
   } catch (e) {
     console.error(e);
     toast('יצירת הקובץ נכשלה. אם הקובץ המקורי מוגן או מוצפן, נסו קובץ אחר.', 6000);
   } finally { busy(false); }
 }
+const SIZE_NOTES = {
+  none: 'הקובץ יוצא כמו שהוא, בלי שינוי באיכות.',
+  light: 'התמונות בקובץ נשמרות מחדש באיכות טובה. הטקסט נשאר חד וניתן לסימון. מתאים לרוב המסמכים.',
+  strong: 'התמונות מוקטנות יותר. הטקסט נשאר טקסט. מתאים למסמכים עם הרבה צילומים.',
+  max: 'כל עמוד הופך לתמונה באיכות בינונית. הקובץ הכי קטן, אבל אי אפשר יותר לסמן או להעתיק את הטקסט המקורי.',
+};
+function syncSizeNote() { $('dlSizeNote').textContent = SIZE_NOTES[$('dlSize').value]; }
+$('dlSize').addEventListener('change', () => { syncSizeNote(); prefs.size = $('dlSize').value; savePrefs(); });
 $('downloadBtn').onclick = () => {
   if (!state.pages.length) return;
   const k = state.selected.size;
@@ -1913,6 +2000,8 @@ $('unitSeg').addEventListener('click', (e) => {
   prefs.unit = b.dataset.unit; savePrefs(); syncUnitSeg(); drawOverlays();
 });
 syncUnitSeg();
+if (prefs.size && SIZE_NOTES[prefs.size]) $('dlSize').value = prefs.size;
+syncSizeNote();
 
 document.querySelectorAll('#edModes .mode').forEach(b => b.addEventListener('click', () => setMode(b.dataset.mode)));
 document.addEventListener('keydown', (e) => {
@@ -2191,6 +2280,7 @@ $('toolsSheet').addEventListener('click', (e) => {
   else if (k === 'addpdf') { closeSheets(); $('fileInput').click(); }
   else if (k === 'imgpages') { closeSheets(); $('imgPagesInput').click(); }
   else if (k === 'select') { closeSheets(); if (edActive()) leaveEditor(); startSelecting(); }
+  else if (k === 'shrink') { if ($('dlSize').value === 'none') $('dlSize').value = 'light'; syncSizeNote(); $('downloadBtn').click(); }
 });
 /* Photos become A4 pages (portrait or landscape to match each photo) */
 $('imgPagesInput').onchange = async (e) => {
@@ -2313,7 +2403,7 @@ $('shareBtn').onclick = async () => {
   closeSheets();
   busy(true, 'מכין את הקובץ לשיתוף…');
   let bytes;
-  try { bytes = await buildPdf(state.pages); } catch (e) { busy(false); toast('יצירת הקובץ נכשלה.', 5000); return; }
+  try { bytes = (await makeFile(state.pages)).bytes; } catch (e) { busy(false); toast('יצירת הקובץ נכשלה.', 5000); return; }
   busy(false);
   const name = outName();
   const file = new File([bytes], name, { type: 'application/pdf' });
